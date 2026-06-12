@@ -169,3 +169,6 @@ nohup*.out
 wandb/*
 outputs/*
 checkpoints/*
+# local tooling
+.omc/
+.vscode/
