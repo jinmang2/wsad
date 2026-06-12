@@ -1,0 +1,7 @@
+defaults: [default]
+
+# VadCLIP: single-crop, train uniform/pad to length 256, test full-length.
+backbone: clip
+clip_length: 256
+segment: null
+single_crop: true

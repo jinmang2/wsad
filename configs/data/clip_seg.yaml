@@ -1,0 +1,7 @@
+defaults: [default]
+
+# tpwng / clip_tsa: single-crop, uniform mean-pool to 32 segments at train time.
+backbone: clip
+clip_length: null
+segment: 32
+single_crop: true

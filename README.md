@@ -28,9 +28,12 @@ All registered in `src.registry.MODELS`, all honor the same contract
 | `vadclip` | VadCLIP | AAAI'24 | VLM dual-branch | CLIP | ✅ nwpu-zxr/VadCLIP |
 | `tpwng` | TPWNG | CVPR'24 | VLM + pseudo-label | CLIP | paper (code unreleased) |
 
-I3D models train locally today; CLIP models (`clip_tsa`, `vadclip`, `tpwng`) need a
-cached CLIP feature set. Per-paper slot maps and reproduction conditions:
-[`docs/REPRODUCTION.md`](docs/REPRODUCTION.md).
+I3D models train on the cached HF features today. CLIP models (`clip_tsa`,
+`vadclip`, `tpwng`) need a local CLIP feature set (VadCLIP `UCFClipFeatures`) under
+`~/data/wsad/clip` — see [`docs/DATA_LOCAL.md`](docs/DATA_LOCAL.md). Their text
+branches are faithful to the official code/paper (CLIP-grounded CoOp prompts;
+CLIP-TSA's Perturbed-TopK TSA; TPWNG's NVP). Per-paper slot maps and reproduction
+conditions: [`docs/REPRODUCTION.md`](docs/REPRODUCTION.md).
 
 ## Quickstart
 
@@ -114,6 +117,7 @@ requirements.txt`.
 
 - [`docs/REPRODUCTION.md`](docs/REPRODUCTION.md) — per-paper slot maps, official-vs-ours notes, repro conditions
 - [`docs/DATA.md`](docs/DATA.md) — data pipeline, the 3 datasets, axis conventions, storage/RAM
+- [`docs/DATA_LOCAL.md`](docs/DATA_LOCAL.md) — `~/data/wsad` local layout (I3D + CLIP), per-runner CLIP contracts, prepare script
 - [`docs/TRAINING.md`](docs/TRAINING.md) — Accelerate trainer + per-model RTX 2060 feasibility
 - [`docs/FEATURE_EXTRACTORS.md`](docs/FEATURE_EXTRACTORS.md) — I3D → CLIP/VideoMAE/VGGish plan
 - [`docs/WEIGHTS_AND_OPTIMIZATION.md`](docs/WEIGHTS_AND_OPTIMIZATION.md) — weight equivalence + SDPA/AMP/compile

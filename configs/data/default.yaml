@@ -4,3 +4,11 @@ num_workers: 8
 dynamic_load: false
 revision: tushar-n
 cache_dir: null
+
+# local-first, backbone-aware loading (see docs/DATA_LOCAL.md)
+root: ${oc.env:WSAD_DATA,"~/data/wsad"}
+source: auto        # local | hub | auto (local if present, else HF)
+backbone: i3d       # i3d | clip
+clip_length: 256    # CLIP train segment length (vadclip 256)
+segment: null       # null=keep; int=uniform mean-pool to N segments (clip_tsa/tpwng 32)
+single_crop: true   # CLIP: use only crop __0 (official single-crop)

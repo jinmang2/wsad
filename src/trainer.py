@@ -35,7 +35,25 @@ def _collate_train(batch):
 
 
 def build_datasets(data_cfg) -> tuple:
-    """Build (train: {normal, abnormal}, test) from the HF feature cache."""
+    """Build (train: {normal, abnormal}, test) — local-first, HF fallback.
+
+    ``data.source``: ``local`` forces ``~/data/wsad``; ``hub`` forces the HF cache;
+    ``auto`` (default) uses local when present for the chosen ``data.backbone``,
+    else HF. CLIP backbones are local-only (no HF CLIP cache yet); see
+    ``docs/DATA_LOCAL.md``.
+    """
+    from src.data.local import build_datasets_local, has_local
+
+    source = getattr(data_cfg, "source", "hub")
+    backbone = getattr(data_cfg, "backbone", "i3d")
+    root = getattr(data_cfg, "root", "~/data/wsad")
+
+    use_local = source == "local" or (
+        source == "auto" and (backbone == "clip" or has_local(root, backbone, "train"))
+    )
+    if use_local:
+        return build_datasets_local(data_cfg)
+
     train = build_feature_dataset(
         mode="train",
         revision=getattr(data_cfg, "revision", "main"),
