@@ -14,6 +14,7 @@ experimental conditions so results are reproducible, not approximate.
 | CLIP-TSA | VLM | CLIP | ✅ model done (needs CLIP feature cache to train) | ~0.876 | `runner=clip_tsa` |
 | UR-DMU | MEM | I3D | ✅ implemented (this branch) | ~0.87 | `runner=ur_dmu` |
 | VadCLIP | VLM | CLIP | ✅ model done (needs CLIP cache + class labels for align) | ~0.88 | `runner=vadclip` |
+| GS-MoE | MoE | I3D | ✅ model done (I3D — trainable locally; SOTA) | ~0.916 | `runner=gs_moe` |
 
 > Feature-extractor extension plan (I3D → CLIP/VideoMAE/VGGish): `docs/FEATURE_EXTRACTORS.md`.
 > Pretrained-weight equivalence + optimization (SDPA/flash, AMP): `docs/WEIGHTS_AND_OPTIMIZATION.md`.
@@ -208,6 +209,53 @@ Cross-checked against the official repo `nwpu-zxr/VadCLIP` (`src/model.py`,
 - Needs a **class-label path** in the dataset (UCF folder name → one of 14
   classes) to activate CLASM; current `FeatureDataset` only yields binary labels.
 - 12.61M params (excl. the frozen CLIP text encoder).
+
+## GS-MoE — Mixture of Experts Guided by Gaussian Splatters (ICCV'25 Highlight)
+
+arXiv 2508.06318 · paradigm: MoE (SOTA ~91.58 UCF) · ✅ paper-based impl
+(official repo `snehashismajhi/GS-MoE` has README only — **code unreleased** at
+implementation time, so this follows the paper, not official source).
+
+### Slot mapping
+| Slot | Component | Code |
+|------|-----------|------|
+| 1. features | I3D R50 (paper 1024-d, T=200 interp; we use the 2048-d seg32 cache, T=32) | existing |
+| 2/4. experts | N class-specialized scorers: attn block + MLP `h→256→128→64→1` | `Expert` |
+| 4. gate | fuse expert score-sequences → final per-snippet score | `GateModel` |
+| 5. loss | top-k-norm MIL + smoothness + sparsity + **TGS** | `_compute_loss` + `src/loss/tgs.py` |
+
+### Key idea
+13 experts (one per UCF anomaly class) each score the snippets; a gate fuses them.
+**Temporal Gaussian Splatting (TGS)**: detect peaks in the abnormal score curve,
+splat a Gaussian around each (width = local monotonic run, σ = local spread),
+normalize the sum → a soft pseudo-label that BCE pulls scores toward. This pulls
+subtle low-scoring snippets near confident peaks into training (the SOTA driver).
+
+### Official-vs-ours comparison (paper-based; no code to diff)
+**Follows the paper:**
+- Expert MLP head `1024→256→128→64→1` + sigmoid; per-expert attention block.
+- TGS: peak prominence > 0.2 over ±2 neighbours, kernel width from monotonic runs,
+  Gaussian splat (Eq. 4), normalized-sum pseudo-label (Eq. 5), loss = top-k-norm
+  MIL + BCE(score, pseudo) (Eq. 6). Warm-up epoch 1 = MIL only (`tgs_enabled`).
+- 13 class experts; AdamW; batch 128 (64+64).
+
+**Deliberate differences (documented):**
+- **Params higher than paper** (~5.5M/expert vs reported ~500K): a 1024-dim 2-head
+  attention is inherently ~4M, so the paper's experts likely use a smaller internal
+  dim / shared encoder — unverifiable without code. Set `hidden_size` lower to
+  shrink. Structure (attn block + MLP head) is faithful.
+- Gate's bi-directional cross-attention with "task-aware logits" is **approximated**
+  by score-refinement → self-attention block → MLP (the paper's gate spec is
+  underspecified in the text and code is unreleased).
+- Uses our 2048-d seg32 cache (T=32) instead of 1024-d T=200; `feature_size`/T are
+  config-driven so the official setup is a config change once those features exist.
+- Class-expert routing (`class_labels`) optional; without it experts train jointly
+  through the gate (the paper's K-means cluster-expert variant).
+
+### Repro notes / blockers
+- **Runs on I3D — trainable locally** once the seg32 cache is downloaded (no CLIP).
+- Full per-class routing needs the **class-label path** (UCF folder → 13 classes).
+- Re-check vs official code when released. ~80M params at defaults (13 experts).
 
 ## Next-paper queue (analysis before implementation)
 

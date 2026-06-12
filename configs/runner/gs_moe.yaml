@@ -1,0 +1,27 @@
+defaults: [default]
+
+# GS-MoE (ICCV'25, SOTA ~91.6 UCF) — class-expert MoE + Temporal Gaussian Splatting.
+# Runs on I3D features (no CLIP needed). Official code unreleased; paper-based impl.
+model_class: src.models.gs_moe.modeling_gs_moe.GSMoEForVideoAnomalyDetection
+
+model_config:
+    _target_: src.models.gs_moe.configuration_gs_moe.GSMoEConfig
+    feature_size: 2048
+    hidden_size: 1024
+    num_experts: 13
+    expert_heads: 2
+    gate_heads: 4
+    dropout_rate: 0.1
+    attn_impl: eager # "sdpa" for FlashAttention/fused kernels (speed; not bit-exact)
+    k_ratio: 16
+    tgs_prominence: 0.2
+    lambda_smooth: 8e-4
+    lambda_sparse: 8e-3
+    w_tgs: 1.0
+
+# Paper: AdamW, batch 128 (64 normal + 64 abnormal). lr unreported -> 1e-4 start.
+# NOTE: enable TGS only from epoch 2 (warm-up epoch 1 = MIL only) via a callback
+# that sets model.tgs_enabled.
+optimizer:
+    learning_rate: 1e-4
+    weight_decay: 0.0005

@@ -19,11 +19,12 @@ whole training loop fits in 6 GB VRAM (RTX 2060 target).
 > plan describes the **target**.
 
 ## Current state (what actually exists)
-- **Six working models** (all registered via `src/registry.py` `MODELS`, all
+- **Seven working models** (all registered via `src/registry.py` `MODELS`, all
   honor the shared runner contract): `Sultani-MIL` (`runner=mil`), `RTFM`
   (`runner=rtfm`), `MGFN` (`runner=mgfn`), `CLIP-TSA` (`runner=clip_tsa`),
-  `UR-DMU` (`runner=ur_dmu`), `VadCLIP` (`runner=vadclip`). CLIP-TSA/VadCLIP
-  need a CLIP feature cache to train; VadCLIP's alignment loss also needs class labels.
+  `UR-DMU` (`runner=ur_dmu`), `VadCLIP` (`runner=vadclip`), `GS-MoE`
+  (`runner=gs_moe`, SOTA, runs on I3D). CLIP-TSA/VadCLIP need a CLIP feature
+  cache; VadCLIP/GS-MoE class-label paths need per-video class labels.
 - **Slot/registry foundation** (`src/registry.py`: `MODELS`, `ENCODERS`, `HEADS`,
   `LOSSES`, `FEATURE_EXTRACTORS`) for the plan's config-driven matrix.
 - **Shared modules** (`src/modules/`): `attention.py` (MHSA + Transformer block

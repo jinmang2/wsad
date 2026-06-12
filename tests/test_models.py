@@ -53,10 +53,18 @@ def _build(name):
         )
 
         return VadCLIPForVideoAnomalyDetection(VadCLIPConfig())
+    if name == "gs_moe":
+        from src.models.gs_moe import (
+            GSMoEConfig,
+            GSMoEForVideoAnomalyDetection,
+        )
+
+        # smaller for a fast test (fewer experts than the 13-class default)
+        return GSMoEForVideoAnomalyDetection(GSMoEConfig(num_experts=3))
     raise ValueError(name)
 
 
-MODEL_NAMES = ["mgfn", "rtfm", "sultani", "clip_tsa", "ur_dmu", "vadclip"]
+MODEL_NAMES = ["mgfn", "rtfm", "sultani", "clip_tsa", "ur_dmu", "vadclip", "gs_moe"]
 
 
 def test_registry_has_all_models():
