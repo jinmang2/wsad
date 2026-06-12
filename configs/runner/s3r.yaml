@@ -1,0 +1,24 @@
+defaults: [default]
+
+# S3R (ECCV'22) — dictionary-based sparse representation (enNormal/deNormal).
+# Runs on I3D features. Cross-checked vs louisYen/S3R; dictionary is learnable here
+# (official precomputes it offline via dictionary learning).
+model_class: src.models.s3r.modeling_s3r.S3RForVideoAnomalyDetection
+
+model_config:
+    _target_: src.models.s3r.configuration_s3r.S3RConfig
+    feature_size: 2048
+    dict_size: 64
+    reduction: 4
+    denormal_reduction: 16
+    k: 3
+    dropout_rate: 0.7
+    margin: 100.0
+    alpha: 0.0001
+    lambda_smooth: 8e-4
+    lambda_sparse: 8e-3
+    w_macro: 1.0
+
+optimizer:
+    learning_rate: 1e-3
+    weight_decay: 0.0005

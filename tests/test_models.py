@@ -68,6 +68,13 @@ def _build(name):
         )
 
         return TPWNGForVideoAnomalyDetection(TPWNGConfig())
+    if name == "s3r":
+        from src.models.s3r import (
+            S3RConfig,
+            S3RForVideoAnomalyDetection,
+        )
+
+        return S3RForVideoAnomalyDetection(S3RConfig())
     raise ValueError(name)
 
 
@@ -80,6 +87,7 @@ MODEL_NAMES = [
     "vadclip",
     "gs_moe",
     "tpwng",
+    "s3r",
 ]
 
 

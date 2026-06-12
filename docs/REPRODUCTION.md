@@ -16,6 +16,7 @@ experimental conditions so results are reproducible, not approximate.
 | VadCLIP | VLM | CLIP | ✅ model done (needs CLIP cache + class labels for align) | ~0.88 | `runner=vadclip` |
 | GS-MoE | MoE | I3D | ✅ model done (I3D — trainable locally; SOTA) | ~0.916 | `runner=gs_moe` |
 | TPWNG | VLM+PL | CLIP | ✅ model done (CLIP; first self-training method) | ~0.878 | `runner=tpwng` |
+| S3R | dictionary | I3D | ✅ model done (I3D; cross-checked vs official) | ~0.857 | `runner=s3r` |
 
 > Feature-extractor extension plan (I3D → CLIP/VideoMAE/VGGish): `docs/FEATURE_EXTRACTORS.md`.
 > Pretrained-weight equivalence + optimization (SDPA/flash, AMP): `docs/WEIGHTS_AND_OPTIMIZATION.md`.
@@ -298,6 +299,44 @@ PLG fusion (α=0.2, θ=0.55), losses = ranking + DIL + BCE(pseudo) + sparsity(0.
 - Needs the **CLIP feature cache** (same blocker as CLIP-TSA / VadCLIP).
 - Self-training pseudo-labels are generated online from the model's similarities —
   no external pseudo-label data needed (verifiable offline). 12.88M params.
+
+## S3R — Self-supervised Sparse Representation (ECCV'22)
+
+DOI 10.1007/978-3-031-19778-9_42 · paradigm: dictionary / sparse representation
+· ✅ cross-checked vs official **louisYen/S3R** (`detector.py`, `memory_module.py`,
+`residual_attention.py`).
+
+### Slot mapping
+| Slot | Component | Code | Official |
+|------|-----------|------|----------|
+| 2. encoder | `Aggregate` (pyramid dilated conv + non-local, GroupNorm) ×2 streams | `Aggregate` | `Aggregate` |
+| 4. head | `enNormal` reads a normal-event **dictionary**; `deNormal` channel-filters it from the video stream; video + macro classifiers + top-k MIL | `EnNormal`/`DeNormal` | `enNormal`/`deNormal` |
+| 5. loss | RTFM-style magnitude separation + video/macro BCE + smooth + sparse | `_compute_loss` | trainer |
+
+### Key idea
+A **dictionary** of normal-event prototypes is read by attention (`enNormal`) to
+reconstruct a "normal-pattern" stream; `deNormal` computes a channel gate from the
+video-vs-reconstruction residual, exciting anomaly-distinctive channels in the
+video and normal-common channels in the macro. Anomalies = what the normal
+dictionary can't reconstruct.
+
+### Official-vs-ours comparison
+**Follows the official code:** `enNormal` query/cache/value attention read of the
+dictionary; `deNormal` `ChannelGate` from `avg_pool(video) - avg_pool(macro)`
+residual with `video*=scale`, `macro*=(1-scale)`; non-local with **`attn/T`
+scaling (no softmax)**; dual `Aggregate` streams; video classifier
+`2048→512→128→1`; macro classifier via global avg-pool MLP; top-k magnitude MIL +
+RTFM loss; k = quantize_size//10 = 3.
+
+**Deliberate difference (documented):** the official dictionary is **precomputed
+offline** by dictionary learning (sparse coding) on normal features and passed in
+as the `macro` input; here it is a **learnable `nn.Parameter`** trained
+end-to-end, so the model fits the shared `forward(video, …)` contract. To match
+the paper exactly, precompute the dictionary and load it into `self.dictionary`.
+
+### Repro notes / blockers
+- **Runs on I3D — trainable locally** once the seg32 cache is downloaded. 56.4M
+  params (two 2048-d `Aggregate` streams dominate). No CLIP, no class labels needed.
 
 ## Next-paper queue (analysis before implementation)
 
