@@ -4,7 +4,29 @@ Two questions: (1) is PyTorch Lightning still the right harness given the
 normal+abnormal dual-loader pattern, and (2) which models actually train on a
 6 GB RTX 2060 (often sharing the GPU with another job) + 7.8 GB system RAM.
 
-> Status: **review only — training not started yet.** No code changed here.
+> Status: the recommendation below is **implemented** — `src/trainer.py`
+> (`WSVADTrainer`, Accelerate) + `train.py` (Hydra entrypoint). The legacy
+> Lightning path (`run.py` / `src/runner.py`) is kept. Actual AUC training on the
+> real feature cache is still pending (data handled in a separate session).
+
+## Implemented trainer (`src/trainer.py`)
+
+`WSVADTrainer` is the explicit Accelerate loop:
+- **dual loader** = `zip(normal_loader, abnormal_loader)`; each step concatenates
+  normal-first and the model splits at `B//2`.
+- **AMP** via `Accelerator(mixed_precision=...)`; `train.py` maps the Hydra
+  `trainer.cls.precision` (`16-mixed` → `fp16`) onto it.
+- **class labels**: models whose `forward` accepts `class_labels` (VadCLIP,
+  GS-MoE) automatically receive a `(B,)` int per-video class id (0=Normal, 1..13);
+  both models were standardized to that single format.
+- **eval**: frame-level ROC/PR-AUC each epoch via `src.inference.score_feature`
+  (handles the test layout + BN-WVAD's unbounded rank-scores).
+- **dataset-agnostic**: `fit(train_datasets, test_dataset, epochs)` takes datasets,
+  so `tests/test_trainer.py` drives the full train+eval loop on **synthetic
+  features offline** (verified for the plain and class_labels paths).
+
+Run: `python train.py runner=rtfm` (Accelerate) — or the legacy
+`python run.py runner=rtfm` (Lightning).
 
 ## 1. Training-framework review
 

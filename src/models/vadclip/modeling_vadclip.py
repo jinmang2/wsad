@@ -234,7 +234,10 @@ class VadCLIPForVideoAnomalyDetection(VadCLIPPreTrainedModel):
 
         # loss2 = CLASM: multi-class MIL-Align CE (needs per-video class labels)
         if class_labels is not None:
-            labels = class_labels.to(device).float()
+            # class_labels: (B,) int (0=Normal, 1..13 anomaly) -> multi-hot
+            labels = F.one_hot(
+                class_labels.long().to(device), self.config.num_class
+            ).float()
             labels = labels / labels.sum(dim=1, keepdim=True).clamp_min(1e-6)
             inst_logits = torch.stack(
                 [

@@ -218,11 +218,10 @@ class GSMoEForVideoAnomalyDetection(GSMoEPreTrainedModel):
 
         # optional class-specialized expert supervision (needs per-video class id)
         if class_labels is not None:
-            # route each abnormal video to its class expert; that expert's top-k
-            # score should be high, others low.
-            cls = class_labels.to(
-                device
-            )  # (half,) integer class id in [0, num_experts)
+            # class_labels: (B,) int, 0=Normal, 1..13 anomaly classes. Route each
+            # abnormal video to its class expert (anomaly class i -> expert i-1).
+            n_exp = expert_scores.size(1)
+            cls = (class_labels[half:].long().to(device) - 1).clamp(0, n_exp - 1)
             abn_expert = expert_scores[half:]  # (half, E, T)
             tgt = torch.zeros(half, abn_expert.size(1), device=device)
             tgt[torch.arange(half), cls] = 1.0

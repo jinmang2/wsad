@@ -37,8 +37,11 @@ whole training loop fits in 6 GB VRAM (RTX 2060 target).
   (pretrained-weight numerical-equivalence helpers).
 - **Feature-backbone abstraction** (`src/features/`): `FeatureExtractor` ABC +
   registered `i3d` + `clip` (implemented) and `videomae`/`vggish` (planned stubs).
+- **Training**: `src/trainer.py` (`WSVADTrainer`, Accelerate — explicit dual
+  normal/abnormal loop, AMP, auto `class_labels`, frame-level AUC eval) +
+  `train.py` (Hydra entrypoint). Legacy Lightning path kept (`run.py`/`src/runner.py`).
 - **Unified inference/eval** in `src/inference.py` (pure torch, no Lightning);
-  **contract tests** in `tests/` (18 passing: 5 models + attention equivalence).
+  **contract + trainer tests** in `tests/` (synthetic, offline).
 - **I3D feature extractor** (`src/i3d.py`) + offline extraction script (`scripts/extract_features.py`).
 - Training data is loaded as cached I3D features from HF Hub
   (`jinmang2/ucf_crime_tencrop_i3d_seg32`), never raw video at train time.
