@@ -46,10 +46,17 @@ def _build(name):
         )
 
         return URDMUForVideoAnomalyDetection(URDMUConfig())
+    if name == "vadclip":
+        from src.models.vadclip import (
+            VadCLIPConfig,
+            VadCLIPForVideoAnomalyDetection,
+        )
+
+        return VadCLIPForVideoAnomalyDetection(VadCLIPConfig())
     raise ValueError(name)
 
 
-MODEL_NAMES = ["mgfn", "rtfm", "sultani", "clip_tsa", "ur_dmu"]
+MODEL_NAMES = ["mgfn", "rtfm", "sultani", "clip_tsa", "ur_dmu", "vadclip"]
 
 
 def test_registry_has_all_models():

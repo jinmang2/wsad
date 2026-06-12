@@ -13,7 +13,7 @@ experimental conditions so results are reproducible, not approximate.
 | MGFN   | MAG      | I3D     | ✅ implemented | ~0.87 | `runner=mgfn` |
 | CLIP-TSA | VLM | CLIP | ✅ model done (needs CLIP feature cache to train) | ~0.876 | `runner=clip_tsa` |
 | UR-DMU | MEM | I3D | ✅ implemented (this branch) | ~0.87 | `runner=ur_dmu` |
-| VadCLIP | VLM | CLIP | ⬜ P4 (needs CLIP extractor) | ~0.88 | — |
+| VadCLIP | VLM | CLIP | ✅ model done (needs CLIP cache + class labels for align) | ~0.88 | `runner=vadclip` |
 
 > Feature-extractor extension plan (I3D → CLIP/VideoMAE/VGGish): `docs/FEATURE_EXTRACTORS.md`.
 > Pretrained-weight equivalence + optimization (SDPA/flash, AMP): `docs/WEIGHTS_AND_OPTIMIZATION.md`.
@@ -160,6 +160,54 @@ abnormal bank fires on abnormal videos (and vice versa).
   averages at score level — align this for exact-AUC reproduction.
 - mem_size=60, top-k ratio T/16, triplet margin 1.0; loss weights in config.
   Verify ~0.87 against official hyperparameters when training. 8.47M params.
+
+## VadCLIP — Adapting Vision-Language Models for WSVAD (AAAI'24)
+
+arXiv 2308.11681 · paradigm: VLM · ✅ architecture implemented (binary path runnable now)
+
+Cross-checked against the official repo `nwpu-zxr/VadCLIP` (`src/model.py`,
+`src/utils/layers.py`, `src/ucf_train.py`, `src/ucf_option.py`).
+
+### Slot mapping
+| Slot | Component | Code | Official |
+|------|-----------|------|----------|
+| 1. features | CLIP ViT-B/16 frames (512-d) | `src/features/clip.py` | `clip.load("ViT-B/16")` |
+| 2. encoder | LGT-Adapter: windowed temporal Transformer + sim-graph GCN + dist-graph GCN | `encode_video` | `temporal` + `gc1..gc4` |
+| 3a. text | learnable class prompt table (+ optional CLIP encode) | `text_features`, `load_clip_text_features` | `encode_textprompt` (CoOp + frozen CLIP) |
+| 4. head | binary branch (C) + visual-language alignment (A) | `classifier`, alignment block | `logits1`, `logits2` |
+| 5. loss | CLAS2 binary MIL + text contrastive (+ CLASM MIL-Align when class labels) | `_compute_loss` | `CLAS2 + CLASM + loss3` |
+
+### Official-vs-ours comparison (sanity check, not bit-exact)
+**Matches the official design:**
+- LGT-Adapter dual graph: similarity adjacency (cosine, threshold 0.7, softmax =
+  `adj4`) + distance adjacency (`exp(-|i-j|/e)` = `DistanceAdj`), each a 2-layer
+  GCN `512→256→256`, concat → `linear` (512). Faithful port in `src/modules/graph.py`.
+- Windowed local attention mask (block-diagonal, window=8) on the temporal Transformer.
+- Binary branch `classifier(vf + mlp2(vf))`; alignment uses binary scores to attend
+  visual feats, adds to text features (+`mlp1`), cosine logits `/0.07`. Same flow.
+- Losses: CLAS2 (sigmoid top-k `T/16+1` mean → BCE, abnormal=1) and the text
+  contrastive (|cos(normal, abnormal_i)| averaged ×0.1) reproduced exactly; CLASM
+  (top-k mean per class → softmax CE on normalized multi-hot) implemented.
+- Hyperparameters from `ucf_option.py`: width 512, layers 2, head 1, window 8,
+  prompt 10/10, num_class 14, AdamW lr 2e-5, MS-LR [4,8]×0.1, 10 epochs.
+
+**Deliberate differences (documented, architecturally equivalent):**
+- Temporal block = this repo's pre-norm `TransformerEncoderLayer` (eager/SDPA
+  switchable) vs official post-norm QuickGELU `ResidualAttentionBlock`. Same
+  capacity; not bit-exact (acceptable — we re-train, not load their checkpoint).
+- Text features are a **learnable table** until CLIP-encoded (official encodes
+  CoOp prompts through frozen CLIP). `load_clip_text_features()` fills them from
+  CLIP when `open_clip` is available — deferred with the CLIP extractor.
+- `.scores` (our eval contract) = `sigmoid(binary logits)` (C-branch). The
+  A-branch alignment logits are returned for the headline alignment AUC; wiring
+  the alignment-based frame score + per-video **class labels** (for CLASM) is the
+  remaining data extension before full-AUC reproduction.
+
+### Repro notes / blockers
+- Needs the **CLIP feature cache** (512-d) — same blocker as CLIP-TSA.
+- Needs a **class-label path** in the dataset (UCF folder name → one of 14
+  classes) to activate CLASM; current `FeatureDataset` only yields binary labels.
+- 12.61M params (excl. the frozen CLIP text encoder).
 
 ## Next-paper queue (analysis before implementation)
 

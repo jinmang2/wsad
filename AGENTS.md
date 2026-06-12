@@ -19,16 +19,18 @@ whole training loop fits in 6 GB VRAM (RTX 2060 target).
 > plan describes the **target**.
 
 ## Current state (what actually exists)
-- **Five working models** (all registered via `src/registry.py` `MODELS`, all
+- **Six working models** (all registered via `src/registry.py` `MODELS`, all
   honor the shared runner contract): `Sultani-MIL` (`runner=mil`), `RTFM`
-  (`runner=rtfm`), `MGFN` (`runner=mgfn`), `CLIP-TSA` (`runner=clip_tsa`,
-  needs CLIP feature cache), `UR-DMU` (`runner=ur_dmu`).
+  (`runner=rtfm`), `MGFN` (`runner=mgfn`), `CLIP-TSA` (`runner=clip_tsa`),
+  `UR-DMU` (`runner=ur_dmu`), `VadCLIP` (`runner=vadclip`). CLIP-TSA/VadCLIP
+  need a CLIP feature cache to train; VadCLIP's alignment loss also needs class labels.
 - **Slot/registry foundation** (`src/registry.py`: `MODELS`, `ENCODERS`, `HEADS`,
   `LOSSES`, `FEATURE_EXTRACTORS`) for the plan's config-driven matrix.
 - **Shared modules** (`src/modules/`): `attention.py` (MHSA + Transformer block
   with switchable `eager`/`sdpa` kernels — FlashAttention via SDPA), `mil.py`
-  (shared top-k magnitude selection), `compat.py` (pretrained-weight numerical-
-  equivalence helpers).
+  (shared top-k magnitude selection), `graph.py` (batched GraphConvolution +
+  similarity/distance adjacency for LGT-Adapter methods), `compat.py`
+  (pretrained-weight numerical-equivalence helpers).
 - **Feature-backbone abstraction** (`src/features/`): `FeatureExtractor` ABC +
   registered `i3d` + `clip` (implemented) and `videomae`/`vggish` (planned stubs).
 - **Unified inference/eval** in `src/inference.py` (pure torch, no Lightning);

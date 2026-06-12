@@ -1,0 +1,24 @@
+defaults: [default]
+
+# VadCLIP (AAAI'24) — CLIP dual-branch (binary + visual-language alignment).
+# Requires CLIP features (dim 512); class-label path needed for the MIL-Align term.
+model_class: src.models.vadclip.modeling_vadclip.VadCLIPForVideoAnomalyDetection
+
+model_config:
+    _target_: src.models.vadclip.configuration_vadclip.VadCLIPConfig
+    feature_size: 512
+    embed_dim: 512
+    visual_width: 512
+    visual_layers: 2
+    visual_head: 1
+    visual_length: 256
+    attn_window: 8
+    num_class: 14
+    dropout_rate: 0.0
+    attn_impl: eager # "sdpa" for FlashAttention/fused kernels (speed; not bit-exact)
+    w_text: 0.1
+
+# Paper: AdamW, lr 2e-5, MultiStepLR milestones [4,8] x0.1, 10 epochs.
+optimizer:
+    learning_rate: 2e-5
+    weight_decay: 0.0
