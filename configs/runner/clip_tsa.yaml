@@ -1,0 +1,24 @@
+defaults: [default]
+
+# CLIP-TSA (ICIP'23) — CLIP frame features + temporal self-attention + top-k MIL.
+# Requires CLIP features (configs/data must point at a CLIP cache, dim 512).
+model_class: src.models.clip_tsa.modeling_clip_tsa.CLIPTSAForVideoAnomalyDetection
+
+model_config:
+    _target_: src.models.clip_tsa.configuration_clip_tsa.CLIPTSAConfig
+    feature_size: 512
+    num_segments: 32
+    num_layers: 2
+    num_heads: 8
+    mlp_ratio: 4.0
+    k: 3
+    dropout_rate: 0.5
+    attn_impl: eager # "sdpa" for FlashAttention/fused kernels (speed; not bit-exact)
+    margin: 100.0
+    alpha: 0.0001
+    lambda_smooth: 8e-4
+    lambda_sparse: 8e-3
+
+optimizer:
+    learning_rate: 1e-3
+    weight_decay: 0.0005

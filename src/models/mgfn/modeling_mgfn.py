@@ -8,6 +8,7 @@ from transformers import PreTrainedModel
 from transformers.file_utils import ModelOutput
 
 from ...loss import MGFNLoss, SparsityLoss, TemporalSmoothnessLoss
+from ...registry import MODELS
 from .configuration_mgfn import MGFNConfig
 
 
@@ -265,6 +266,7 @@ class MGFNModel(MGFNPreTrainedModel):
         return MGFNModelOutput(outputs=out)
 
 
+@MODELS.register("mgfn")
 class MGFNForVideoAnomalyDetection(MGFNPreTrainedModel):
     def __init__(self, config):
         super().__init__(config)

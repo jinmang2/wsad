@@ -1,0 +1,19 @@
+defaults: [default]
+
+model_class: src.models.rtfm.modeling_rtfm.RTFMForVideoAnomalyDetection
+
+model_config:
+    _target_: src.models.rtfm.configuration_rtfm.RTFMConfig
+    feature_size: 2048
+    num_segments: 32
+    k: 3
+    dropout_rate: 0.7
+    margin: 100.0
+    alpha: 0.0001
+    lambda_smooth: 8e-4
+    lambda_sparse: 8e-3
+
+# RTFM paper optimization setup (Adam, lr 1e-3, wd 5e-4) — matches runner/default.
+optimizer:
+    learning_rate: 1e-3
+    weight_decay: 0.0005

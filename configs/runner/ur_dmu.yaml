@@ -1,0 +1,23 @@
+defaults: [default]
+
+# UR-DMU (AAAI'23) — dual memory units + uncertainty regulation on I3D features.
+model_class: src.models.ur_dmu.modeling_ur_dmu.URDMUForVideoAnomalyDetection
+
+model_config:
+    _target_: src.models.ur_dmu.configuration_ur_dmu.URDMUConfig
+    feature_size: 2048
+    hidden_size: 512
+    num_layers: 2
+    num_heads: 4
+    mem_size: 60
+    topk_ratio: 16
+    dropout_rate: 0.5
+    attn_impl: eager # "sdpa" for FlashAttention/fused kernels (speed; not bit-exact)
+    margin: 1.0
+    w_mem: 1.0
+    w_triplet: 0.1
+    w_kl: 0.001
+
+optimizer:
+    learning_rate: 1e-4
+    weight_decay: 0.0005
