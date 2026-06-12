@@ -15,6 +15,7 @@ experimental conditions so results are reproducible, not approximate.
 | UR-DMU | MEM | I3D | ✅ implemented (this branch) | ~0.87 | `runner=ur_dmu` |
 | VadCLIP | VLM | CLIP | ✅ model done (needs CLIP cache + class labels for align) | ~0.88 | `runner=vadclip` |
 | GS-MoE | MoE | I3D | ✅ model done (I3D — trainable locally; SOTA) | ~0.916 | `runner=gs_moe` |
+| TPWNG | VLM+PL | CLIP | ✅ model done (CLIP; first self-training method) | ~0.878 | `runner=tpwng` |
 
 > Feature-extractor extension plan (I3D → CLIP/VideoMAE/VGGish): `docs/FEATURE_EXTRACTORS.md`.
 > Pretrained-weight equivalence + optimization (SDPA/flash, AMP): `docs/WEIGHTS_AND_OPTIMIZATION.md`.
@@ -256,6 +257,47 @@ subtle low-scoring snippets near confident peaks into training (the SOTA driver)
 - **Runs on I3D — trainable locally** once the seg32 cache is downloaded (no CLIP).
 - Full per-class routing needs the **class-label path** (UCF folder → 13 classes).
 - Re-check vs official code when released. ~80M params at defaults (13 experts).
+
+## TPWNG — Text Prompt with Normality Guidance (CVPR'24)
+
+arXiv 2404.08531 · paradigm: VLM + pseudo-label self-training (PL) · ✅ paper-based
+(no official code found — like GS-MoE, follows the paper). **First PL / self-training
+method here (slot 6).**
+
+### Slot mapping
+| Slot | Component | Code |
+|------|-----------|------|
+| 1. features | CLIP ViT-B/16 frames (512-d) | `src/features/clip.py` |
+| 2. encoder | **TCSAL**: transformer + learnable per-position soft-mask span | `TCSAL` |
+| 3a. text | learnable class prompts (class 0 = Normal) | `text_features` |
+| 4. head | frame↔text cosine similarity → PLG-fused anomaly score | `_similarity` / `forward` |
+| 5/6. loss + self-train | ranking + DIL + BCE(score, pseudo) + sparsity/smoothness; pseudo-labels from the model's own similarities | `_compute_loss` |
+
+### Key idea
+Align frames with learnable text prompts for "normal" and each anomaly class.
+**Normality guidance**: a frame's anomaly score fuses high anomaly-text similarity
+with low normal-text similarity (PLG, α=0.2). Threshold (θ=0.55) → pseudo frame
+labels → BCE self-training. **DIL** decorrelates the normal vs. anomaly similarity
+curves so they separate.
+
+### Official-vs-ours comparison (paper-based; no code to diff)
+**Follows the paper:** learnable text prompts (l=8), TCSAL soft-mask
+`χ_z = clamp((R+z-|i-j|)/R, 0, 1)` with learnable per-position span z (R=256),
+PLG fusion (α=0.2, θ=0.55), losses = ranking + DIL + BCE(pseudo) + sparsity(0.1)
++ smoothness(0.01); Adam wd 0.005, UCF lr 1e-3 / 50 epochs / batch 64.
+
+**Deliberate differences (documented):**
+- **NVP (Normality Visual Prompt)** frame-aggregation refinement omitted in v1
+  (planned) — the normal-text guidance is via the learnable normal-class prompt only.
+- TCSAL block = this repo's pre-norm transformer (soft-mask as additive log-bias)
+  vs the paper's exact formulation; class text = learnable table until CLIP-encoded.
+- CLIP text-encoder fine-tuning (final projection) is replaced by the learnable
+  text table; wire real CLIP prompts via the same path as VadCLIP when open_clip lands.
+
+### Repro notes / blockers
+- Needs the **CLIP feature cache** (same blocker as CLIP-TSA / VadCLIP).
+- Self-training pseudo-labels are generated online from the model's similarities —
+  no external pseudo-label data needed (verifiable offline). 12.88M params.
 
 ## Next-paper queue (analysis before implementation)
 

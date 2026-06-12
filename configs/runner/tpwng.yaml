@@ -1,0 +1,25 @@
+defaults: [default]
+
+# TPWNG (CVPR'24) — text prompt + normality guidance + pseudo-label self-training.
+# CLIP features (512-d). Official code unreleased; paper-based impl.
+model_class: src.models.tpwng.modeling_tpwng.TPWNGForVideoAnomalyDetection
+
+model_config:
+    _target_: src.models.tpwng.configuration_tpwng.TPWNGConfig
+    feature_size: 512
+    embed_dim: 512
+    num_class: 14
+    n_ctx: 8
+    tcsal_layers: 4
+    tcsal_heads: 4
+    span_R: 256
+    alpha: 0.2
+    theta: 0.55
+    lambda_sparse: 0.1
+    lambda_smooth: 0.01
+    attn_impl: eager # "sdpa" for FlashAttention/fused kernels (speed; not bit-exact)
+
+# Paper: Adam, weight_decay 0.005, lr 1e-3 (UCF), 50 epochs, batch 64 (32+32).
+optimizer:
+    learning_rate: 1e-3
+    weight_decay: 0.005

@@ -61,10 +61,26 @@ def _build(name):
 
         # smaller for a fast test (fewer experts than the 13-class default)
         return GSMoEForVideoAnomalyDetection(GSMoEConfig(num_experts=3))
+    if name == "tpwng":
+        from src.models.tpwng import (
+            TPWNGConfig,
+            TPWNGForVideoAnomalyDetection,
+        )
+
+        return TPWNGForVideoAnomalyDetection(TPWNGConfig())
     raise ValueError(name)
 
 
-MODEL_NAMES = ["mgfn", "rtfm", "sultani", "clip_tsa", "ur_dmu", "vadclip", "gs_moe"]
+MODEL_NAMES = [
+    "mgfn",
+    "rtfm",
+    "sultani",
+    "clip_tsa",
+    "ur_dmu",
+    "vadclip",
+    "gs_moe",
+    "tpwng",
+]
 
 
 def test_registry_has_all_models():
