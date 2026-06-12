@@ -6,10 +6,11 @@ runner contract. Slot mapping (WSAD_INTEGRATION_PLAN.md section 4):
   - slot 2 (temporal encoder): **LGT-Adapter** — a windowed-local temporal
     Transformer + two graph-conv branches (similarity graph = global/semantic,
     distance graph = local/temporal), concatenated.
-  - slot 3a (text branch): learnable class prompt embeddings (CoOp-style). The
-    *full* branch encodes prompts with the frozen CLIP text encoder; here the
-    class embeddings are a learnable table that ``load_clip_text_features`` can
-    fill from CLIP once available (open_clip deferred, like the CLIP extractor).
+  - slot 3a (text branch): **faithful** ``encode_textprompt`` — a frozen CLIP text
+    tower (OpenAI ViT-B/16) with learnable CoOp context tokens (prompt_prefix=10 /
+    postfix=10) around each class name, encoded every forward (see
+    ``text_encoder.CLIPPromptTextEncoder``). ``use_clip_text=False`` falls back to a
+    free learnable table for offline/no-download runs.
   - slot 4 (scoring head): binary branch (C) -> per-frame anomaly logits, and the
     visual-language alignment branch (A) -> per-class logits (MIL-Align).
   - slot 5 (loss): binary MIL BCE (CLAS2) + text contrastive (loss3); the
@@ -21,8 +22,9 @@ logits are returned alongside for the A-branch.
 
 Differences vs official (architecturally equivalent, not bit-exact): the temporal
 block is this repo's pre-norm ``TransformerEncoderLayer`` (eager/SDPA switchable)
-rather than the official post-norm QuickGELU block; class text features are a
-learnable table until CLIP-encoded.
+rather than the official post-norm QuickGELU ``ResidualAttentionBlock``. The text
+branch, LGT-Adapter (adj4 + DistanceAdj), losses (CLAS2/CLASM/text-contrastive),
+and the (B, 1, 256, 512) input contract now match the official ``CLIPVAD``.
 
 Ref: https://github.com/nwpu-zxr/VadCLIP/blob/main/src/model.py
 """
@@ -122,15 +124,40 @@ class VadCLIPForVideoAnomalyDetection(VadCLIPPreTrainedModel):
 
         # slot 3a/4: alignment (A) branch
         self.mlp1 = _mlp(vw)
-        # learnable class text features (stand-in for frozen-CLIP-encoded prompts);
-        # class 0 == "Normal" by convention. Fill via load_clip_text_features().
-        self.text_features = nn.Parameter(
-            torch.empty(config.num_class, config.embed_dim)
+        # text branch: faithful = frozen CLIP text tower + learnable CoOp context
+        # (encode_textprompt); legacy = a free learnable table (offline/no CLIP).
+        self.use_clip_text = config.use_clip_text
+        self.text_encoder = None
+        # legacy table is a plain Parameter (untouched by HF _init_weights)
+        self.text_features = (
+            None
+            if config.use_clip_text
+            else nn.Parameter(torch.empty(config.num_class, config.embed_dim))
         )
-        nn.init.normal_(self.text_features, std=0.01)
+        if self.text_features is not None:
+            nn.init.normal_(self.text_features, std=0.01)
 
         self._force_split = False
         self.post_init()
+
+        # build the frozen CLIP text tower AFTER post_init so HF _init_weights does
+        # NOT re-initialize its pretrained weights.
+        if config.use_clip_text:
+            from .text_encoder import CLIPPromptTextEncoder
+
+            self.text_encoder = CLIPPromptTextEncoder(
+                model_name=config.clip_model_name,
+                pretrained=config.clip_pretrained,
+                embed_dim=config.embed_dim,
+                prompt_prefix=config.prompt_prefix,
+                prompt_postfix=config.prompt_postfix,
+            )
+
+    def _text_features(self) -> torch.Tensor:
+        """``(num_class, embed_dim)`` class text features (CLIP-encoded or table)."""
+        if self.text_encoder is not None:
+            return self.text_encoder(self.config.class_names)
+        return self.text_features
 
     @property
     def force_split(self) -> bool:
@@ -149,11 +176,20 @@ class VadCLIPForVideoAnomalyDetection(VadCLIPPreTrainedModel):
             mask[lo:hi, lo:hi] = 0.0
         return mask.view(1, 1, t, t)
 
+    def _position_embeddings(self, t: int, device) -> torch.Tensor:
+        """Frame position embeddings for length ``t`` (interpolated if t > 256)."""
+        vlen = self.config.visual_length
+        if t <= vlen:
+            return self.frame_position_embeddings(torch.arange(t, device=device))
+        # eval on full-length clips: linearly interpolate the learned table to t
+        table = self.frame_position_embeddings.weight.t().unsqueeze(0)  # (1, vw, vlen)
+        out = F.interpolate(table, size=t, mode="linear", align_corners=False)
+        return out.squeeze(0).t()  # (t, vw)
+
     def encode_video(self, x: torch.Tensor) -> torch.Tensor:
         # x: (B, T, vw)
         b, t, _ = x.size()
-        pos = torch.arange(t, device=x.device).unsqueeze(0).expand(b, -1)
-        h = x + self.frame_position_embeddings(pos)
+        h = x + self._position_embeddings(t, x.device).unsqueeze(0)
 
         bias = self._window_bias(t, x.device)
         for layer in self.temporal:
@@ -181,10 +217,11 @@ class VadCLIPForVideoAnomalyDetection(VadCLIPPreTrainedModel):
         vf = self.encode_video(x)  # (B, T, vw)
         binary_logits = self.classifier(vf + self.mlp2(vf))  # (B, T, 1)
 
-        # visual-language alignment (A branch)
+        # visual-language alignment (A branch) — official forward() math
+        text_features_ori = self._text_features()  # (C, embed) CLIP-encoded or table
         attn = binary_logits.permute(0, 2, 1) @ vf  # (B, 1, vw)
         attn = attn / (attn.norm(dim=-1, keepdim=True) + 1e-12)
-        tf = self.text_features.unsqueeze(0).expand(x.size(0), -1, -1)  # (B, C, embed)
+        tf = text_features_ori.unsqueeze(0).expand(x.size(0), -1, -1)  # (B, C, embed)
         tf = tf + attn.expand(-1, tf.size(1), -1)
         tf = tf + self.mlp1(tf)
         vf_n = vf / (vf.norm(dim=-1, keepdim=True) + 1e-12)
@@ -195,7 +232,9 @@ class VadCLIPForVideoAnomalyDetection(VadCLIPPreTrainedModel):
 
         loss = None
         if abnormal_labels is not None and normal_labels is not None:
-            loss = self._compute_loss(binary_logits, alignment_logits, class_labels)
+            loss = self._compute_loss(
+                binary_logits, alignment_logits, text_features_ori, class_labels
+            )
 
         return VadCLIPVideoAnomalyDetectionOutput(
             loss=loss,
@@ -208,7 +247,9 @@ class VadCLIPForVideoAnomalyDetection(VadCLIPPreTrainedModel):
     def _topk_k(self, t: int) -> int:
         return max(t // 16 + 1, 1)
 
-    def _compute_loss(self, binary_logits, alignment_logits, class_labels):
+    def _compute_loss(
+        self, binary_logits, alignment_logits, text_features_ori, class_labels
+    ):
         bs, t, _ = binary_logits.size()
         half = bs // 2
         device = binary_logits.device
@@ -223,8 +264,8 @@ class VadCLIPForVideoAnomalyDetection(VadCLIPPreTrainedModel):
         loss1 = F.binary_cross_entropy(inst.clamp(1e-6, 1 - 1e-6), y)
 
         # loss3 = text-feature contrastive (Normal vs each abnormal class)
-        tf = self.text_features / (
-            self.text_features.norm(dim=-1, keepdim=True) + 1e-12
+        tf = text_features_ori / (
+            text_features_ori.norm(dim=-1, keepdim=True) + 1e-12
         )
         normal = tf[0]
         loss3 = sum(torch.abs(normal @ tf[j]) for j in range(1, tf.size(0)))
@@ -253,21 +294,25 @@ class VadCLIPForVideoAnomalyDetection(VadCLIPPreTrainedModel):
         return loss
 
     @torch.no_grad()
-    def load_clip_text_features(self, class_names, device: str = "cuda"):
-        """Fill ``text_features`` from the frozen CLIP text encoder (deferred path).
+    def load_clip_text_features(self, class_names=None, device: str = "cuda"):
+        """Legacy-table only: CLIP-init the free ``text_features`` table.
 
-        Encodes each class prompt with open_clip and copies the embeddings into the
-        learnable table. The full paper additionally learns CoOp context tokens;
-        this provides the CLIP-aligned initialization. Requires ``open_clip``.
+        No-op when ``use_clip_text=True`` (the faithful path already encodes the
+        prompts through the frozen CLIP text tower every forward via
+        :class:`CLIPPromptTextEncoder`). Only useful as a one-time init for the
+        ``use_clip_text=False`` fallback table.
         """
+        if self.text_encoder is not None or self.text_features is None:
+            return  # faithful path: nothing to fill
         import open_clip  # lazy
 
-        model, _, _ = open_clip.create_model_and_transforms(
-            "ViT-B-16", pretrained="laion2b_s34b_b88k"
+        names = class_names or self.config.class_names
+        model = open_clip.create_model(
+            self.config.clip_model_name, pretrained=self.config.clip_pretrained
         )
         model.eval().to(device)
-        tokenizer = open_clip.get_tokenizer("ViT-B-16")
-        tokens = tokenizer([f"a video of {name}" for name in class_names]).to(device)
+        tokenizer = open_clip.get_tokenizer(self.config.clip_model_name)
+        tokens = tokenizer([f"a video of {name}" for name in names]).to(device)
         feats = model.encode_text(tokens).float()
         assert feats.shape == self.text_features.shape
         self.text_features.data.copy_(feats.to(self.text_features.device))

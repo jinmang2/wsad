@@ -32,6 +32,9 @@ class CLIPTSAConfig(PretrainedConfig):
         alpha: float = 0.0001,
         lambda_smooth: float = 8e-4,
         lambda_sparse: float = 8e-3,
+        apply_ha: bool = True,
+        topk_ratio: float = 0.7,
+        num_samples: int = 100,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -47,3 +50,9 @@ class CLIPTSAConfig(PretrainedConfig):
         self.alpha = alpha
         self.lambda_smooth = lambda_smooth
         self.lambda_sparse = lambda_sparse
+        # TSA = Perturbed Top-K HardAttention (official): differentiable snippet
+        # selection. apply_ha toggles it; topk_ratio = fraction of T snippets kept;
+        # num_samples = perturbation samples.
+        self.apply_ha = apply_ha
+        self.topk_ratio = topk_ratio
+        self.num_samples = num_samples

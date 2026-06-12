@@ -52,7 +52,9 @@ def _build(name):
             VadCLIPForVideoAnomalyDetection,
         )
 
-        return VadCLIPForVideoAnomalyDetection(VadCLIPConfig())
+        # offline contract: legacy learnable table (no CLIP download). The faithful
+        # CLIP text branch is exercised in tests/test_vadclip_text.py.
+        return VadCLIPForVideoAnomalyDetection(VadCLIPConfig(use_clip_text=False))
     if name == "gs_moe":
         from src.models.gs_moe import (
             GSMoEConfig,
@@ -67,7 +69,9 @@ def _build(name):
             TPWNGForVideoAnomalyDetection,
         )
 
-        return TPWNGForVideoAnomalyDetection(TPWNGConfig())
+        # offline contract: legacy table (no CLIP download). Faithful CLIP+NVP path
+        # is exercised in tests/test_tpwng.py.
+        return TPWNGForVideoAnomalyDetection(TPWNGConfig(use_clip_text=False))
     if name == "s3r":
         from src.models.s3r import (
             S3RConfig,

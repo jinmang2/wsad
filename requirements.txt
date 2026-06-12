@@ -26,6 +26,7 @@ pytorchvideo
 torchcodec
 opencv-python
 segment-anything
+open_clip_torch
 gradio
 streamlit
 wandb

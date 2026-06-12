@@ -36,6 +36,11 @@ class TPWNGConfig(PretrainedConfig):
         lambda_sparse: float = 0.1,
         lambda_smooth: float = 0.01,
         attn_impl: str = "eager",
+        use_clip_text: bool = True,
+        use_nvp: bool = True,
+        clip_model_name: str = "ViT-B-16",
+        clip_pretrained: str = "openai",
+        class_names: list = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -51,3 +56,14 @@ class TPWNGConfig(PretrainedConfig):
         self.lambda_sparse = lambda_sparse
         self.lambda_smooth = lambda_smooth
         self.attn_impl = attn_impl
+        # faithful: CLIP-grounded CoOp text (only text_projection fine-tuned) +
+        # Normality Visual Prompt. use_clip_text=False -> offline learnable table.
+        self.use_clip_text = use_clip_text
+        self.use_nvp = use_nvp
+        self.clip_model_name = clip_model_name
+        self.clip_pretrained = clip_pretrained
+        self.class_names = class_names or [
+            "normal", "abuse", "arrest", "arson", "assault", "burglary",
+            "explosion", "fighting", "roadAccidents", "robbery", "shooting",
+            "shoplifting", "stealing", "vandalism",
+        ]
