@@ -21,7 +21,7 @@ from hydra.utils import _locate, instantiate
 from sklearn.metrics import auc, precision_recall_curve, roc_curve
 
 import src.models  # noqa: F401  (triggers model registration)
-from src.dataset import build_feature_dataset
+from src.data import build_feature_dataset
 
 
 def build_model(

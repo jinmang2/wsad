@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from datasets import load_dataset
 from PIL import Image
-from src.dataset import TenCropVideoFrameDataset
+from src.data import TenCropVideoFrameDataset
 from src.i3d import build_i3d_feature_extractor
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm

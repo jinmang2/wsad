@@ -41,7 +41,7 @@ class I3DFeatureExtractor(FeatureExtractor):
 
     @torch.no_grad()
     def extract(self, video: Union[str, List[Image.Image]]) -> np.ndarray:
-        from src.dataset import TenCropVideoFrameDataset
+        from src.data import TenCropVideoFrameDataset
 
         clips = TenCropVideoFrameDataset(video, frames_per_clip=self.snippet_len)
         loader = DataLoader(clips, batch_size=self.batch_size, shuffle=False)

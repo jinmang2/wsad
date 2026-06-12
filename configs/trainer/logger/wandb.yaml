@@ -1,5 +1,0 @@
-wandb:
-    _target_: lightning.pytorch.loggers.wandb.WandbLogger
-    name: ${hydra:runtime.choices.data}-${hydra:runtime.choices.runner}-${now:%Y%m%d-%H%M%S}
-    project: anomaly_detection_on_video
-    log_model: all

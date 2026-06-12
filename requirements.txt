@@ -20,7 +20,6 @@ openpyxl
 zipp
 hydra-core
 omegaconf
-lightning
 torchmetrics
 decord
 pytorchvideo

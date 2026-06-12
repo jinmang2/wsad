@@ -22,7 +22,7 @@ def main(args: omegaconf.DictConfig) -> None:
     model = _locate(args.runner.model_class)(config)
 
     precision = "no"
-    prec = str(getattr(args.trainer.cls, "precision", "32-true"))
+    prec = str(getattr(args.trainer, "precision", "no"))
     if "16-mixed" in prec or "fp16" in prec:
         precision = "fp16"
     elif "bf16" in prec:
@@ -42,7 +42,7 @@ def main(args: omegaconf.DictConfig) -> None:
     trainer.fit(
         train_datasets,
         test_dataset,
-        epochs=int(getattr(args.trainer.cls, "max_epochs", 1)),
+        epochs=int(getattr(args.trainer, "max_epochs", 1)),
     )
 
 

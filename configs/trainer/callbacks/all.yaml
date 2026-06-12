@@ -1,3 +1,0 @@
-defaults:
-    - lrmonitor
-    - model_checkpoint
