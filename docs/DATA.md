@@ -74,6 +74,50 @@ Not yet on the Hub. Use the VadCLIP authors' precomputed UCF CLIP ViT-B/16 (512-
 `feature_size: 512`. Confirm the layout (10-crop? frame vs seg32?) on arrival and
 adapt the loader if needed. Local extraction is avoided (103 GB raw + CPU decode).
 
+## Modular data layer (`src/data/`)
+
+The deprecated HF loading script (`ucf_crime.py`, a `GeneratorBasedBuilder` +
+`trust_remote_code`) is replaced by a **manifest-driven, script-free** layer:
+
+| Module | Role |
+|--------|------|
+| `src/data/labels.py` | 14-class taxonomy (Normal + 13) + `parse_event(filename)` → class. The class is free (encoded in the filename), so VadCLIP/GS-MoE get `class_id` with no new annotation. |
+| `src/data/manifest.py` | `Manifest`/`Record` — `{video_id, path, event, anomaly, split, size}`; build by walking a dir or from filenames; read/write `jsonl`/`parquet`. The single source of truth (mirrors VadCLIP's `{path, label}` CSV). |
+| `src/data/features.py` | `FeatureDataset` (zip-backed, current cache) + `ManifestFeatureDataset` (per-video `.npy` by path — the CLIP/new-backbone path). Both emit `{feature, anomaly, event, class_id[, label]}`. |
+| `src/data/video.py` | raw-video 10-crop dataset for extraction (decord, lazy). |
+
+`src/dataset.py` is now a thin back-compat re-export, so existing imports are
+unaffected. The `class_id` field is emitted now; wiring it into the train step
+(for VadCLIP CLASM / GS-MoE routing) is a small runner change, done when training starts.
+
+## Storage & format recommendation
+
+**Where to put data (WSL, 7.8 GB RAM, 719 GB ext4 SSD):**
+- **Bulk → native ext4 SSD** (`~/data/wsad/...`). Rely on the OS page cache for
+  hot reuse. Never `/mnt/c` (9P = slow).
+- **`/dev/shm` (tmpfs) is RAM-backed → max ~half of RAM (~3.9 GB).** It does *not*
+  fit the 10–66 GB feature caches or 103 GB raw video. Use it only for a small,
+  repeatedly-read hot subset (and only when RAM is otherwise free — here it isn't).
+  → For this box, keep features on SSD; do **not** stage them in `/dev/shm`.
+- Suggested layout: `~/data/wsad/features/<backbone>/{train,test}/*.npy` +
+  `manifest.parquet`. The loader references a backbone *name*, never a path.
+
+**Format / "data store" — right-sizing (you asked; here's the call):**
+- **Spark / Hadoop = overkill, do not use as the pipeline.** Those are for
+  distributed TB–PB workloads across a cluster. This is ~1900 videos / tens of GB
+  on one laptop — they'd add huge operational weight for zero benefit. (If you want
+  to *learn* Spark, do a tiny standalone exercise separately; I can sketch one, but
+  it should not be in the data path. → flagged as heavy, recommend skipping.)
+- **Right-sized stack at this scale:**
+  - metadata → **parquet** (or jsonl) manifest — columnar, instant, tiny.
+  - features → per-video **`.npy`, memory-mapped** (`np.load(mmap_mode="r")`) for
+    low-RAM lazy access; or consolidate to **HDF5/zarr/LMDB** if you want one file
+    + fast random reads.
+  - for Hub distribution / streaming of large media → **WebDataset** tar shards or
+    **parquet with `datasets.Video()`** (both are no-script, HF-native).
+- **Recommended:** parquet manifest + per-video `.npy` on SSD, `mmap`-loaded. It's
+  the simplest thing that satisfies low-RAM lazy loading and stays HF-publishable.
+
 ## RAM strategy (7.8 GB system)
 
 - `dynamic_load: true` is **mandatory** (zip stays on disk, one `.npy` read at a time).
