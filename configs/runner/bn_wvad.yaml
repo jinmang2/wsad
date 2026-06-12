@@ -1,0 +1,26 @@
+defaults: [default]
+
+# BN-WVAD (2023) — BatchNorm DFM abnormality criterion. Runs on I3D features.
+# Cross-checked vs cool-xuan/BN-WVAD. Score = DFM-distance x normal-score (rank-based).
+model_class: src.models.bn_wvad.modeling_bn_wvad.BNWVADForVideoAnomalyDetection
+
+model_config:
+    _target_: src.models.bn_wvad.configuration_bn_wvad.BNWVADConfig
+    feature_size: 2048
+    hidden_size: 512
+    num_layers: 2
+    num_heads: 4
+    ratios: [16, 32]
+    kernel_sizes: [1, 1, 1]
+    ratio_sample: 0.2
+    ratio_batch: 0.4
+    mpp_margin: 1.0
+    w_triplet: [5.0, 20.0]
+    w_normal: 1.0
+    w_mpp: 1.0
+    attn_impl: eager # "sdpa" for FlashAttention/fused kernels (speed; not bit-exact)
+
+# Paper: Adam, lr 1e-4, weight_decay 5e-5, batch 64 (32+32), num_segments 200.
+optimizer:
+    learning_rate: 1e-4
+    weight_decay: 0.00005

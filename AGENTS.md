@@ -19,14 +19,15 @@ whole training loop fits in 6 GB VRAM (RTX 2060 target).
 > plan describes the **target**.
 
 ## Current state (what actually exists)
-- **Nine working models** (all registered via `src/registry.py` `MODELS`, all
+- **Ten working models** (all registered via `src/registry.py` `MODELS`, all
   honor the shared runner contract): `Sultani-MIL` (`runner=mil`), `RTFM`
   (`runner=rtfm`), `MGFN` (`runner=mgfn`), `CLIP-TSA` (`runner=clip_tsa`),
   `UR-DMU` (`runner=ur_dmu`), `VadCLIP` (`runner=vadclip`), `GS-MoE`
   (`runner=gs_moe`, SOTA, runs on I3D), `TPWNG` (`runner=tpwng`, first
-  pseudo-label self-training method), `S3R` (`runner=s3r`, dictionary-based, I3D).
-  CLIP-TSA/VadCLIP/TPWNG need a CLIP feature cache; VadCLIP/GS-MoE class-label
-  paths need per-video class labels.
+  pseudo-label self-training method), `S3R` (`runner=s3r`, dictionary-based, I3D),
+  `BN-WVAD` (`runner=bn_wvad`, BatchNorm-DFM, I3D). CLIP-TSA/VadCLIP/TPWNG need a
+  CLIP feature cache; VadCLIP/GS-MoE class-label paths need per-video class labels.
+  BN-WVAD's `.scores` is an unbounded rank-score (not [0,1]).
 - **Slot/registry foundation** (`src/registry.py`: `MODELS`, `ENCODERS`, `HEADS`,
   `LOSSES`, `FEATURE_EXTRACTORS`) for the plan's config-driven matrix.
 - **Shared modules** (`src/modules/`): `attention.py` (MHSA + Transformer block

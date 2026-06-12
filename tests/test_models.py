@@ -75,6 +75,13 @@ def _build(name):
         )
 
         return S3RForVideoAnomalyDetection(S3RConfig())
+    if name == "bn_wvad":
+        from src.models.bn_wvad import (
+            BNWVADConfig,
+            BNWVADForVideoAnomalyDetection,
+        )
+
+        return BNWVADForVideoAnomalyDetection(BNWVADConfig())
     raise ValueError(name)
 
 
@@ -88,7 +95,11 @@ MODEL_NAMES = [
     "gs_moe",
     "tpwng",
     "s3r",
+    "bn_wvad",
 ]
+
+# models whose anomaly score is an unbounded rank-score, not a [0,1] probability
+UNBOUNDED_SCORE = {"bn_wvad"}
 
 
 def test_registry_has_all_models():
@@ -101,7 +112,9 @@ def test_inference_scores_shape(name):
     with torch.no_grad():
         out = model(video=torch.randn(1, NCROPS, T, DIM))
     assert out.scores.shape == (1, T, 1)
-    assert torch.all((out.scores >= 0) & (out.scores <= 1))
+    assert torch.all(torch.isfinite(out.scores)) and torch.all(out.scores >= 0)
+    if name not in UNBOUNDED_SCORE:
+        assert torch.all(out.scores <= 1)
 
 
 @pytest.mark.parametrize("name", MODEL_NAMES)

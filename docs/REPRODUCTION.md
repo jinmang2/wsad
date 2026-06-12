@@ -17,6 +17,7 @@ experimental conditions so results are reproducible, not approximate.
 | GS-MoE | MoE | I3D | ✅ model done (I3D — trainable locally; SOTA) | ~0.916 | `runner=gs_moe` |
 | TPWNG | VLM+PL | CLIP | ✅ model done (CLIP; first self-training method) | ~0.878 | `runner=tpwng` |
 | S3R | dictionary | I3D | ✅ model done (I3D; cross-checked vs official) | ~0.857 | `runner=s3r` |
+| BN-WVAD | BatchNorm-DFM | I3D | ✅ model done (I3D; cross-checked vs official) | ~0.872 | `runner=bn_wvad` |
 
 > Feature-extractor extension plan (I3D → CLIP/VideoMAE/VGGish): `docs/FEATURE_EXTRACTORS.md`.
 > Pretrained-weight equivalence + optimization (SDPA/flash, AMP): `docs/WEIGHTS_AND_OPTIMIZATION.md`.
