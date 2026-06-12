@@ -40,6 +40,8 @@ whole training loop fits in 6 GB VRAM (RTX 2060 target).
 - Training data is loaded as cached I3D features from HF Hub
   (`jinmang2/ucf_crime_tencrop_i3d_seg32`), never raw video at train time.
 - Docs: `docs/REPRODUCTION.md` (per-paper slot maps + repro conditions),
+  `docs/DATA.md` (data pipeline, the 3 HF datasets, axis conventions, RAM strategy),
+  `docs/TRAINING.md` (framework review + 2060 per-model feasibility),
   `docs/FEATURE_EXTRACTORS.md` (backbone plan), `docs/WEIGHTS_AND_OPTIMIZATION.md`
   (weight equivalence + SDPA/AMP/compile).
 
