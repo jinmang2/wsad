@@ -4,31 +4,34 @@ from transformers.configuration_utils import PretrainedConfig
 class VadCLIPConfig(PretrainedConfig):
     """Configuration for VadCLIP (Wu et al., AAAI'24).
 
-    Dual-branch: a coarse-grained binary branch (C) and a fine-grained
-    visual-language alignment branch (A) over CLIP features, with an LGT-Adapter
-    (local windowed Transformer + global/local graph convs).
+    Faithful to the official ``CLIPVAD`` (nwpu-zxr/VadCLIP, ``src/model.py`` +
+    ``src/ucf_option.py``). Dual-branch over CLIP ViT-B/16 frame features: a
+    coarse binary branch (C) and a fine visual-language alignment branch (A), with
+    an LGT-Adapter (windowed temporal Transformer + similarity/distance graph
+    convs) and a learnable-CoOp text branch run through a **frozen CLIP text
+    tower** (``clipmodel``) every forward.
 
-    Defaults match the official UCF setup (src/ucf_option.py).
+    Defaults match official UCF (``ucf_option.py``): visual_length 256,
+    visual_width 512, visual_head 1, visual_layers 2, attn_window 8,
+    prompt_prefix/postfix 10, classes 14.
 
     Args:
-        feature_size: CLIP ViT-B/16 dim (512). Magnitude channel sliced off.
-        embed_dim: CLIP text/visual embedding dim (512).
+        feature_size / embed_dim: CLIP ViT-B/16 dim (512).
         visual_width / visual_layers / visual_head: temporal Transformer.
-        visual_length: max padded sequence length (frame position embeddings).
+        visual_length: fixed padded length for the temporal branch + frame
+            position embeddings (256). Inputs are padded/split to this length.
         attn_window: local attention window for the temporal Transformer.
         num_class: anomaly classes incl. "Normal" (UCF: 14).
-        attn_impl: ``"eager"`` (exact) or ``"sdpa"`` (flash/fused).
+        attn_impl: ``"eager"`` (exact) or ``"sdpa"`` (flash/fused, not bit-exact).
         w_text: weight on the text-feature contrastive (loss3, paper: 0.1).
-        use_clip_text: if ``True`` (default, faithful) the text branch is the
-            frozen CLIP text tower + learnable CoOp context (``encode_textprompt``);
-            if ``False`` it falls back to a free learnable ``text_features`` table
-            (offline/legacy, no CLIP download).
-        clip_model_name / clip_pretrained: CLIP variant for the text tower. Default
-            ``ViT-B-16`` / ``openai`` matches the OpenAI CLIP used to extract the
-            official UCF VadCLIP features (shared text/visual space).
-        prompt_prefix / prompt_postfix: CoOp learnable context tokens before/after
-            the class name (paper: 10 / 10).
-        class_names: per-class text prompts (UCF lowercased, official label_map).
+        prompt_prefix / prompt_postfix: learnable CoOp context tokens before/after
+            the class name in the 77-token prompt (paper: 10 / 10).
+        clip_text_*: the frozen CLIP text tower architecture (OpenAI ViT-B/16:
+            vocab 49408, context 77, width 512, 12 layers, 8 heads). Its weights
+            load from the official ``clipmodel.*`` checkpoint keys.
+        class_names: per-class prompt names — **official capitalized label_map
+            values**, since the BPE tokenization is case-sensitive (``"Normal"`` ≠
+            ``"normal"``); changing case changes the text features.
     """
 
     def __init__(
@@ -44,11 +47,15 @@ class VadCLIPConfig(PretrainedConfig):
         dropout_rate: float = 0.0,
         attn_impl: str = "eager",
         w_text: float = 0.1,
-        use_clip_text: bool = True,
-        clip_model_name: str = "ViT-B-16",
-        clip_pretrained: str = "openai",
         prompt_prefix: int = 10,
         prompt_postfix: int = 10,
+        # frozen CLIP text tower (OpenAI ViT-B/16)
+        clip_vocab_size: int = 49408,
+        clip_context_length: int = 77,
+        clip_text_width: int = 512,
+        clip_text_layers: int = 12,
+        clip_text_heads: int = 8,
+        clip_tokenizer_name: str = "ViT-B-16",
         class_names: list = None,
         **kwargs,
     ):
@@ -64,14 +71,18 @@ class VadCLIPConfig(PretrainedConfig):
         self.dropout_rate = dropout_rate
         self.attn_impl = attn_impl
         self.w_text = w_text
-        self.use_clip_text = use_clip_text
-        self.clip_model_name = clip_model_name
-        self.clip_pretrained = clip_pretrained
         self.prompt_prefix = prompt_prefix
         self.prompt_postfix = prompt_postfix
-        # official UCF label_map (model.py): Normal-first, class 0 == Normal
+        self.clip_vocab_size = clip_vocab_size
+        self.clip_context_length = clip_context_length
+        self.clip_text_width = clip_text_width
+        self.clip_text_layers = clip_text_layers
+        self.clip_text_heads = clip_text_heads
+        self.clip_tokenizer_name = clip_tokenizer_name
+        # official UCF label_map (ucf_test.py), Normal-first; class 0 == Normal.
+        # Capitalized to match the official case-sensitive BPE tokenization.
         self.class_names = class_names or [
-            "normal", "abuse", "arrest", "arson", "assault", "burglary",
-            "explosion", "fighting", "roadAccidents", "robbery", "shooting",
-            "shoplifting", "stealing", "vandalism",
+            "Normal", "Abuse", "Arrest", "Arson", "Assault", "Burglary",
+            "Explosion", "Fighting", "RoadAccidents", "Robbery", "Shooting",
+            "Shoplifting", "Stealing", "Vandalism",
         ]

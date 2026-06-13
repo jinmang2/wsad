@@ -52,9 +52,10 @@ def _build(name):
             VadCLIPForVideoAnomalyDetection,
         )
 
-        # offline contract: legacy learnable table (no CLIP download). The faithful
-        # CLIP text branch is exercised in tests/test_vadclip_text.py.
-        return VadCLIPForVideoAnomalyDetection(VadCLIPConfig(use_clip_text=False))
+        # faithful VadCLIP needs input length == visual_length; the CLIP text tower
+        # is random-init offline (no download). Numerical equivalence vs the official
+        # checkpoint is verified in scripts/verify_vadclip.py.
+        return VadCLIPForVideoAnomalyDetection(VadCLIPConfig(visual_length=T))
     if name == "gs_moe":
         from src.models.gs_moe import (
             GSMoEConfig,
