@@ -19,7 +19,7 @@ class URDMUConfig(PretrainedConfig):
 
     def __init__(
         self,
-        feature_size: int = 2048,
+        feature_size: int = 1024,
         hidden_size: int = 512,
         num_layers: int = 2,
         num_heads: int = 4,
@@ -28,9 +28,10 @@ class URDMUConfig(PretrainedConfig):
         dropout_rate: float = 0.5,
         attn_impl: str = "eager",
         margin: float = 1.0,
-        w_mem: float = 1.0,
+        w_mem: float = 0.1,
         w_triplet: float = 0.1,
         w_kl: float = 0.001,
+        w_distance: float = 0.0001,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -46,3 +47,4 @@ class URDMUConfig(PretrainedConfig):
         self.w_mem = w_mem
         self.w_triplet = w_triplet
         self.w_kl = w_kl
+        self.w_distance = w_distance

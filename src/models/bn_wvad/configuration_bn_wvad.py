@@ -23,7 +23,7 @@ class BNWVADConfig(PretrainedConfig):
 
     def __init__(
         self,
-        feature_size: int = 2048,
+        feature_size: int = 1024,
         hidden_size: int = 512,
         num_layers: int = 2,
         num_heads: int = 4,

@@ -1,24 +1,20 @@
 """BN-WVAD: BatchNorm-based Weakly Supervised VAD (Zhou et al., 2023).
 
-Slot mapping (WSAD_INTEGRATION_PLAN.md section 4):
-  - slot 2 (temporal encoder): Conv1d embedding + self-attention.
-  - slot 4 (scoring head): a ``NormalHead`` whose BatchNorm running stats define
-    normality; anomaly = **DFM** (Divergence of Feature from Mean — a Mahalanobis
-    distance to the BN running mean/var) times a learned normal score.
-  - slot 5 (loss): NormalLoss (normal videos -> low scores) + MPP triplet (push
-    selected abnormal feats far from the BN mean, normal feats close).
+Faithful port of the official ``WSAD`` (cool-xuan/BN-WVAD, ``models/model.py`` +
+``normal_head.py`` + ``translayer.py``) into this repo's HF style. Module/param
+names mirror the official state dict so ``ckpts/*.pkl`` loads directly.
 
-Honors the runner contract: ``forward(video, abnormal_labels, normal_labels) ->
-ModelOutput`` with ``.loss`` and ``.scores`` (B, T, 1). Note BN-WVAD's score is an
-**unbounded** rank-score (distance x score), not a [0,1] probability — fine for
-ROC-AUC (rank-based).
+Architecture (official):
+  - ``embedding`` (``Temporal``): ``Conv1d(1024->512, k=3) + ReLU``.
+  - ``selfatt`` (shared dual-branch ``Transformer`` — same translayer as UR-DMU).
+  - ``normal_head`` (``NormalHead``): conv/BN stack whose BatchNorm running stats
+    define the normal distribution; anomaly = **DFM** (Mahalanobis distance of the
+    pre-BN features to the BN running mean/var). Eval score = ``Σ distance ·
+    normal_score`` (an unbounded rank-score; fine for ROC-AUC).
 
-Cross-checked vs official cool-xuan/BN-WVAD (models/model.py, normal_head.py,
-losses/{mpp,normal}_loss.py). Faithful: NormalHead, DFM, MPP triplet (per-BN
-weights [5,20], margin 1), NormalLoss (L2 of normal scores), selection by top-DFM.
-**Simplified (documented):** features are crop-averaged before the pos/neg
-selection (cleaner than the official per-crop reshape); self-attention is this
-repo's shared block.
+Train returns ``pre_normal_scores`` + selected normal/abnormal feats (MPP). Verified
+vs the official checkpoint in ``scripts/verify_bn_wvad.py``.
+Ref: https://github.com/cool-xuan/BN-WVAD — https://arxiv.org/abs/2311.15367
 """
 
 from dataclasses import dataclass
@@ -27,12 +23,10 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from einops import rearrange
 from transformers import PreTrainedModel
 from transformers.utils import ModelOutput
 
-from src.modules import TransformerEncoderLayer
+from src.modules.translayer import Transformer
 from src.registry import MODELS
 
 from .configuration_bn_wvad import BNWVADConfig
@@ -44,13 +38,21 @@ class BNWVADVideoAnomalyDetectionOutput(ModelOutput):
     scores: Optional[torch.FloatTensor] = None
 
 
-def _mahalanobis(x, mu, var):
-    # x: (..., C); mu/var: (C,) -> (...) distance
-    return torch.sqrt(torch.sum((x - mu) ** 2 / var, dim=-1) + 1e-12)
+class Temporal(nn.Module):
+    def __init__(self, input_size: int, out_size: int):
+        super().__init__()
+        self.conv_1 = nn.Sequential(
+            nn.Conv1d(input_size, out_size, kernel_size=3, stride=1, padding=1), nn.ReLU()
+        )
+
+    def forward(self, x):
+        x = x.permute(0, 2, 1)
+        x = self.conv_1(x)
+        return x.permute(0, 2, 1)
 
 
 class NormalHead(nn.Module):
-    """Conv stack with two BatchNorms whose running stats define normality."""
+    """Official ``NormalHead``: conv/BN stack; BN running stats = normality model."""
 
     def __init__(self, in_channel=512, ratios=(16, 32), kernel_sizes=(1, 1, 1)):
         super().__init__()
@@ -65,14 +67,15 @@ class NormalHead(nn.Module):
         self.sigmoid = nn.Sigmoid()
         self.bns = [self.bn1, self.bn2]
 
-    def forward(self, x):  # x: (BN, C, T)
-        feats = []
+    def forward(self, x):  # x: (BN, C, T) -> [conv1_out, conv2_out, scores]
+        outputs = []
         x = self.conv1(x)
-        feats.append(x)  # pre-bn1 feature
+        outputs.append(x)
         x = self.conv2(self.act(self.bn1(x)))
-        feats.append(x)  # pre-bn2 feature
-        scores = self.sigmoid(self.conv3(self.act(self.bn2(x))))  # (BN, 1, T)
-        return feats, scores
+        outputs.append(x)
+        x = self.sigmoid(self.conv3(self.act(self.bn2(x))))
+        outputs.append(x)
+        return outputs
 
 
 class BNWVADPreTrainedModel(PreTrainedModel):
@@ -81,13 +84,14 @@ class BNWVADPreTrainedModel(PreTrainedModel):
 
     def _init_weights(self, module):
         if isinstance(module, (nn.Linear, nn.Conv1d)):
-            nn.init.xavier_uniform_(module.weight)
-            if module.bias is not None:
+            if getattr(module, "weight", None) is not None:
+                nn.init.xavier_uniform_(module.weight)
+            if getattr(module, "bias", None) is not None:
                 nn.init.constant_(module.bias, 0)
 
     @property
     def dummy_inputs(self):
-        return {"video": torch.randn(32, 10, 32, 2049)}
+        return {"video": torch.randn(2, 10, 32, self.config.feature_size)}
 
 
 @MODELS.register("bn_wvad")
@@ -95,22 +99,11 @@ class BNWVADForVideoAnomalyDetection(BNWVADPreTrainedModel):
     def __init__(self, config: BNWVADConfig):
         super().__init__(config)
         h = config.hidden_size
-        self.embedding = nn.Sequential(
-            nn.Conv1d(config.feature_size, h, 3, padding=1), nn.ReLU()
-        )
-        self.selfatt = nn.ModuleList(
-            [
-                TransformerEncoderLayer(
-                    h,
-                    heads=config.num_heads,
-                    mlp_ratio=1.0,
-                    dropout=config.dropout_rate,
-                    attn_impl=config.attn_impl,
-                )
-                for _ in range(config.num_layers)
-            ]
-        )
+        self.ratio_sample = config.ratio_sample
+        self.ratio_batch = config.ratio_batch
         self.normal_head = NormalHead(h, config.ratios, config.kernel_sizes)
+        self.embedding = Temporal(config.feature_size, h)
+        self.selfatt = Transformer(h, config.num_layers, config.num_heads, 128, h, dropout=config.dropout_rate)
         self._force_split = False
 
     @property
@@ -121,98 +114,111 @@ class BNWVADForVideoAnomalyDetection(BNWVADPreTrainedModel):
     def force_split(self, val: bool):
         self._force_split = val
 
+    def get_normal_scores(self, x, ncrops=None):
+        outputs = self.normal_head(x.permute(0, 2, 1))
+        normal_scores = outputs[-1]
+        xhs = outputs[:-1]
+        if ncrops:
+            b = normal_scores.shape[0] // ncrops
+            normal_scores = normal_scores.view(b, ncrops, -1).mean(1)
+        return xhs, normal_scores
+
+    @staticmethod
+    def get_mahalanobis_distance(feats, anchor, var, ncrops=None):
+        # feats: (BN, C, T); anchor/var: (C,) -> (BN, T) [official, no eps]
+        distance = torch.sqrt(
+            torch.sum((feats - anchor[None, :, None]) ** 2 / var[None, :, None], dim=1)
+        )
+        if ncrops:
+            bs = distance.shape[0] // ncrops
+            distance = distance.view(bs, ncrops, -1).mean(1)
+        return distance
+
     def forward(
         self,
         video: torch.FloatTensor,
         abnormal_labels: Optional[torch.FloatTensor] = None,
         normal_labels: Optional[torch.FloatTensor] = None,
     ) -> BNWVADVideoAnomalyDetectionOutput:
-        f = self.config.feature_size
-        video = video[..., :f]
-        bs, ncrops, t, _ = video.size()
-        x = rearrange(video, "b n t c -> (b n) t c")
+        x = video[..., : self.config.feature_size]
+        if x.dim() == 4:
+            b, n, t, d = x.size()
+            x = x.reshape(b * n, t, d)
+        else:
+            b, t, d = x.size()
+            n = 1
 
-        x = self.embedding(x.permute(0, 2, 1)).permute(0, 2, 1)  # (BN, T, h)
-        for layer in self.selfatt:
-            x = layer(x)
+        x = self.embedding(x)
+        x = self.selfatt(x)
 
-        feats, scores = self.normal_head(
-            x.permute(0, 2, 1)
-        )  # feats:[(BN,C,T)], scores:(BN,1,T)
-        normal_scores = scores.view(bs, ncrops, -1).mean(dim=1)  # (B, T)
+        normal_feats, normal_scores = self.get_normal_scores(x, n)
+        anchors = [bn.running_mean for bn in self.normal_head.bns]
+        variances = [bn.running_var for bn in self.normal_head.bns]
+        distances = [
+            self.get_mahalanobis_distance(f, a, v, ncrops=n)
+            for f, a, v in zip(normal_feats, anchors, variances)
+        ]
 
-        # DFM: Mahalanobis distance of each pre-BN feature to its BN running stats,
-        # crop-averaged. Sum across BN layers -> anomaly weighting.
-        distances = []
-        for feat, bn in zip(feats, self.normal_head.bns):
-            d = _mahalanobis(
-                feat.permute(0, 2, 1), bn.running_mean, bn.running_var
-            )  # (BN, T)
-            distances.append(d.view(bs, ncrops, -1).mean(dim=1))  # (B, T)
-        distance_sum = sum(distances)  # (B, T)
+        train = abnormal_labels is not None and normal_labels is not None
+        if train:
+            loss = self._compute_loss(normal_feats, normal_scores, distances, anchors, variances, b, n, t)
+            # official train returns pre_normal_scores; expose distance·score as scores
+            scores = (sum(distances) * normal_scores).unsqueeze(-1)
+            return BNWVADVideoAnomalyDetectionOutput(loss=loss, scores=scores)
 
-        scores_out = (distance_sum * normal_scores).unsqueeze(
-            -1
-        )  # (B, T, 1) rank-score
+        distance_sum = sum(distances)
+        return BNWVADVideoAnomalyDetectionOutput(
+            loss=None, scores=(distance_sum * normal_scores).unsqueeze(-1)
+        )
 
-        loss = None
-        if abnormal_labels is not None and normal_labels is not None:
-            loss = self._compute_loss(feats, normal_scores, distances, bs, ncrops)
+    # ---- training selection + losses (official pos_neg_select + MPP/Normal) ----
+    def pos_neg_select(self, feats, distance, ncrops):
+        # feats: (b*ncrops, c, t); distance: (b, t) [already crop-averaged]
+        bsn, c, t = feats.shape
+        b = bsn // ncrops
+        select_num_sample = int(t * self.ratio_sample)
+        select_num_batch = int(b // 2 * t * self.ratio_batch)
+        feats = feats.view(b, ncrops, c, t).mean(1)  # (b, c, t)
+        nor_distance = distance[: b // 2]
+        nor_feats = feats[: b // 2].permute(0, 2, 1)
+        abn_distance = distance[b // 2 :]
+        abn_feats = feats[b // 2 :].permute(0, 2, 1)
+        abn_distance_flatten = abn_distance.reshape(-1)
+        abn_feats_flatten = abn_feats.reshape(-1, c)
 
-        return BNWVADVideoAnomalyDetectionOutput(loss=loss, scores=scores_out)
-
-    # ---- losses (official NormalLoss + MPPLoss) ----
-    def _select(self, feat_bctn, distance, half, t):
-        """Top-DFM abnormal snippets + count-matched top-DFM normal snippets.
-
-        feat_bctn: (B, C, T) crop-averaged; distance: (B, T).
-        """
-        c = feat_bctn.size(1)
-        nor_d, abn_d = distance[:half], distance[half:]
-        nor_f = feat_bctn[:half].permute(0, 2, 1)  # (B, T, C)
-        abn_f = feat_bctn[half:].permute(0, 2, 1)
-
-        k_samp = max(int(t * self.config.ratio_sample), 1)
-        k_batch = max(int(half * t * self.config.ratio_batch), 1)
-
-        m_samp = torch.zeros_like(abn_d, dtype=torch.bool)
-        m_samp.scatter_(1, torch.topk(abn_d, k_samp, dim=1)[1], True)
-        m_batch = torch.zeros_like(abn_d.reshape(-1), dtype=torch.bool)
-        m_batch.scatter_(0, torch.topk(abn_d.reshape(-1), k_batch)[1], True)
+        m_samp = torch.zeros_like(abn_distance, dtype=torch.bool)
+        m_samp.scatter_(1, torch.topk(abn_distance, max(select_num_sample, 1), dim=-1)[1], True)
+        m_batch = torch.zeros_like(abn_distance_flatten, dtype=torch.bool)
+        m_batch.scatter_(0, torch.topk(abn_distance_flatten, max(select_num_batch, 1), dim=-1)[1], True)
         mask = m_batch | m_samp.reshape(-1)
-        sel_abn = abn_f.reshape(-1, c)[mask]  # (M, C)
+        select_abn = abn_feats_flatten[mask]
+        m = int(torch.sum(mask))
 
-        m = sel_abn.size(0)
-        k_nor = m // half + 1
-        idx_nor = torch.topk(nor_d, min(k_nor, t), dim=1)[1]
-        sel_nor = torch.gather(nor_f, 1, idx_nor[..., None].expand(-1, -1, c))
-        sel_nor = sel_nor.reshape(-1, c)[:m]  # (M, C)
-        return sel_nor, sel_abn
+        k_nor = m // max(b // 2, 1) + 1
+        idx_nor = torch.topk(nor_distance, min(k_nor, t), dim=-1)[1]
+        select_nor = torch.gather(nor_feats, 1, idx_nor[..., None].expand(-1, -1, c))
+        select_nor = select_nor.permute(1, 0, 2).reshape(-1, c)[:m]
+        return select_nor, select_abn
 
-    def _compute_loss(self, feats, normal_scores, distances, bs, ncrops):
-        half = bs // 2
-        t = normal_scores.size(1)
-
-        # NormalLoss: normal videos' score curve should be small (L2)
-        loss_normal = torch.norm(normal_scores[:half], p=2, dim=1).mean()
-
-        # MPP triplet per BN layer: anchor=running_mean, pos=normal feat (close),
-        # neg=abnormal feat (far), mahalanobis distance, weighted [5, 20].
+    def _compute_loss(self, feats, normal_scores, distances, anchors, variances, b, n, t):
+        loss_normal = torch.norm(normal_scores[: b // 2], p=2, dim=1).mean()
         loss_mpp = normal_scores.new_zeros(())
-        for feat, bn, dist, wt in zip(
-            feats, self.normal_head.bns, distances, self.config.w_triplet
+        for feat, dist, anchor, var, wt in zip(
+            feats, distances, anchors, variances, self.config.w_triplet
         ):
-            feat_bct = feat.view(bs, ncrops, feat.size(1), feat.size(2)).mean(
-                1
-            )  # (B,C,T)
-            sel_nor, sel_abn = self._select(feat_bct, dist, half, t)
-            if sel_nor.size(0) == 0:
+            sel_nor, sel_abn = self.pos_neg_select(feat, dist, n)
+            if sel_nor.size(0) == 0 or sel_abn.size(0) == 0:
                 continue
+            mse = sel_nor.new_zeros(())  # mahalanobis triplet (anchor=mean)
             triplet = nn.TripletMarginWithDistanceLoss(
                 margin=self.config.mpp_margin,
-                distance_function=partial(_mahalanobis, var=bn.running_var),
+                distance_function=partial(self._maha_pair, var=var),
             )
-            anchor = bn.running_mean[None, :].expand(sel_nor.size(0), -1)
-            loss_mpp = loss_mpp + wt * triplet(anchor, sel_nor, sel_abn)
-
+            anc = anchor[None, :].expand(min(sel_nor.size(0), sel_abn.size(0)), -1)
+            mm = anc.size(0)
+            loss_mpp = loss_mpp + wt * (triplet(anc, sel_nor[:mm], sel_abn[:mm]) + mse)
         return self.config.w_normal * loss_normal + self.config.w_mpp * loss_mpp
+
+    @staticmethod
+    def _maha_pair(a, b, var):
+        return torch.sqrt(torch.sum((a - b) ** 2 / var, dim=-1) + 1e-12)
