@@ -11,12 +11,19 @@ Honors the shared runner contract:
 ``forward(video, abnormal_labels=None, normal_labels=None) -> ModelOutput`` with
 ``.loss`` (None at inference) and ``.scores`` of shape ``(B, T, 1)``.
 
-Official code unreleased at implementation time — this is a paper-based
-reimplementation (arXiv 2508.06318). The expert (Transformer + 1024→256→128→64→1
-MLP) and TGS loss follow the paper; the Gate's bi-directional cross-attention is
-approximated by score-refinement + a self-attention transformer + MLP (documented).
-Class-specialized expert supervision activates when per-video ``class_labels`` are
-provided; otherwise experts train jointly through the gate (cluster-style).
+Official code unreleased — this is a **paper-faithful** reimplementation
+(arXiv 2508.06318, GS-MoE ICCV'25), built section-by-section from the paper:
+  - Expert = Transformer block (2-head; LN→MHSA→res, LN→proj 1024→512→ReLU→1024→res)
+    + MLP ``1024→512→256→128→64→1`` (GELU between layers, sigmoid out).
+  - Gate (3 stages, §gate): (a) refine N expert scores → 1024; (b) **bi-directional
+    cross-attention** — branch 1: Q,K = task-aware features, V = projected scores;
+    branch 2: Q,K = projected scores, V = task-aware features; concat → 2048;
+    (c) Transformer block (4-head, 2048) + MLP ``2048→1024→512→256→128→1``.
+  - TGS loss (Eqs. 3–6): peak detection (prominence 0.2) → Gaussian splat →
+    pseudo-label → ``L_topk-norm + BCE(y, ŷ)``; warm-up (epoch 1) = MIL only.
+The "task-aware features" are UR-DMU encoder outputs in the paper; here the input
+projection stands in for that pipeline (documented). Class-specialized expert
+supervision activates when per-video ``class_labels`` are provided.
 """
 
 from dataclasses import dataclass
@@ -65,7 +72,7 @@ class _AttnBlock(nn.Module):
 
 
 class Expert(nn.Module):
-    """One class-specialized scorer: attention block + 1024->256->128->64->1 MLP."""
+    """One class-specialized scorer: attention block + 1024->512->256->128->64->1 MLP."""
 
     def __init__(self, config: GSMoEConfig):
         super().__init__()
@@ -74,7 +81,9 @@ class Expert(nn.Module):
             h, config.expert_heads, config.dropout_rate, config.attn_impl
         )
         self.mlp = nn.Sequential(
-            nn.Linear(h, 256),
+            nn.Linear(h, 512),
+            nn.GELU(),
+            nn.Linear(512, 256),
             nn.GELU(),
             nn.Linear(256, 128),
             nn.GELU(),
@@ -90,34 +99,73 @@ class Expert(nn.Module):
         return self.mlp(h), h
 
 
-class GateModel(nn.Module):
-    """Fuse expert score-sequences into the final per-snippet score.
+class _BiCrossAttention(nn.Module):
+    """Paper's bi-directional cross-attention between task-aware features ``A`` and
+    projected expert scores ``B`` (both ``(B,T,dim)``):
+      branch 1: Q,K = A, V = B  ->  out1
+      branch 2: Q,K = B, V = A  ->  out2
+    concat([out1, out2]) -> ``(B, T, 2*dim)``.
+    """
 
-    Approximates the paper's 3-stage gate (score refinement -> bi-directional
-    cross-attention -> final transformer + MLP) with: refine expert scores to
-    ``hidden``, a self-attention transformer block, then an MLP to a scalar.
+    def __init__(self, dim: int, heads: int):
+        super().__init__()
+        assert dim % heads == 0
+        self.heads = heads
+        self.scale = (dim // heads) ** -0.5
+        self.a_q = nn.Linear(dim, dim, bias=False)
+        self.a_k = nn.Linear(dim, dim, bias=False)
+        self.a_v = nn.Linear(dim, dim, bias=False)
+        self.b_q = nn.Linear(dim, dim, bias=False)
+        self.b_k = nn.Linear(dim, dim, bias=False)
+        self.b_v = nn.Linear(dim, dim, bias=False)
+
+    def _attn(self, q, k, v):
+        b, t, d = q.shape
+        h = self.heads
+        q = q.view(b, t, h, d // h).transpose(1, 2)
+        k = k.view(b, t, h, d // h).transpose(1, 2)
+        v = v.view(b, t, h, d // h).transpose(1, 2)
+        a = (q @ k.transpose(-2, -1)) * self.scale
+        a = a.softmax(dim=-1)
+        o = a @ v
+        return o.transpose(1, 2).reshape(b, t, d)
+
+    def forward(self, a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+        out1 = self._attn(self.a_q(a), self.a_k(a), self.b_v(b))  # Q,K=A, V=B
+        out2 = self._attn(self.b_q(b), self.b_k(b), self.a_v(a))  # Q,K=B, V=A
+        return torch.cat([out1, out2], dim=-1)  # (B, T, 2*dim)
+
+
+class GateModel(nn.Module):
+    """Paper's 3-stage gate: (a) refine N expert scores -> ``dim``; (b) bi-directional
+    cross-attention with the task-aware features -> ``2*dim``; (c) Transformer block
+    (4-head) + MLP ``2*dim->dim->512->256->128->1``.
     """
 
     def __init__(self, config: GSMoEConfig):
         super().__init__()
         h = config.hidden_size
+        g = 2 * h
         self.refine = nn.Linear(config.num_experts, h)
-        self.block = _AttnBlock(
-            h, config.gate_heads, config.dropout_rate, config.attn_impl
-        )
+        self.cross = _BiCrossAttention(h, config.expert_heads)
+        self.block = _AttnBlock(g, config.gate_heads, config.dropout_rate, config.attn_impl)
         self.mlp = nn.Sequential(
+            nn.Linear(g, h),
+            nn.GELU(),
             nn.Linear(h, 512),
             nn.GELU(),
             nn.Linear(512, 256),
             nn.GELU(),
-            nn.Linear(256, 1),
+            nn.Linear(256, 128),
+            nn.GELU(),
+            nn.Linear(128, 1),
             nn.Sigmoid(),
         )
 
-    def forward(self, expert_scores: torch.Tensor) -> torch.Tensor:
-        # expert_scores: (B, num_experts, T) -> final score (B, T, 1)
-        x = expert_scores.permute(0, 2, 1)  # (B, T, num_experts)
-        x = self.refine(x)
+    def forward(self, expert_scores: torch.Tensor, task_aware: torch.Tensor) -> torch.Tensor:
+        # expert_scores: (B, E, T); task_aware: (B, T, dim) -> final score (B, T, 1)
+        scores = self.refine(expert_scores.permute(0, 2, 1))  # (B, T, dim)
+        x = self.cross(task_aware, scores)  # (B, T, 2*dim)
         x = self.block(x)
         return self.mlp(x)
 
@@ -186,7 +234,9 @@ class GSMoEForVideoAnomalyDetection(GSMoEPreTrainedModel):
         expert_out = [e(h)[0] for e in self.experts]  # list of (B, T, 1)
         expert_scores = torch.cat(expert_out, dim=2).permute(0, 2, 1)  # (B, E, T)
 
-        scores = self.gate(expert_scores)  # (B, T, 1)
+        # gate fuses expert scores with the task-aware features (h) via the
+        # paper's bi-directional cross-attention.
+        scores = self.gate(expert_scores, h)  # (B, T, 1)
 
         loss = None
         if abnormal_labels is not None and normal_labels is not None:

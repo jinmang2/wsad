@@ -22,7 +22,7 @@ class GSMoEConfig(PretrainedConfig):
 
     def __init__(
         self,
-        feature_size: int = 2048,
+        feature_size: int = 1024,  # paper: I3D ResNet50 1024-d (UR-DMU task-aware)
         hidden_size: int = 1024,
         num_experts: int = 13,
         expert_heads: int = 2,

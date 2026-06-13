@@ -53,12 +53,15 @@ class SultaniPreTrainedModel(PreTrainedModel):
 class SultaniForVideoAnomalyDetection(SultaniPreTrainedModel):
     def __init__(self, config: SultaniConfig):
         super().__init__(config)
+        # Faithful to Sultani et al. (CVPR'18): Dense(512, relu) -> Dropout(0.6) ->
+        # Dense(32, LINEAR) -> Dropout(0.6) -> Dense(1, sigmoid). The 32-unit layer
+        # has NO activation in the original (a ReLU here is a common but non-faithful
+        # deviation).
         self.regressor = nn.Sequential(
             nn.Linear(config.feature_size, config.hidden1),
             nn.ReLU(),
             nn.Dropout(config.dropout_rate),
             nn.Linear(config.hidden1, config.hidden2),
-            nn.ReLU(),
             nn.Dropout(config.dropout_rate),
             nn.Linear(config.hidden2, 1),
             nn.Sigmoid(),

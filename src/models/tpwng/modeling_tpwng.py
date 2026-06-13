@@ -71,12 +71,13 @@ class TCSAL(nn.Module):
 
     def _soft_mask_bias(self, x):
         b, t, _ = x.shape
-        z = self.span_R * torch.sigmoid(self.span(x)).squeeze(-1)  # (B, T) per query
+        # paper Eq. 8: z = F · σ(CᵀX + b), F = number of frames (sequence length).
+        z = t * torch.sigmoid(self.span(x)).squeeze(-1)  # (B, T) per-query span
         idx = torch.arange(t, device=x.device).float()
         dist = (idx[:, None] - idx[None, :]).abs()  # (T, T)
-        # clamp((R + z - dist)/R, 0, 1) per query row -> (B, T, T)
+        # paper Eq. 7: χ_z(h) = clamp((R + z - h)/R, 0, 1); R = ramp softness.
         m = ((self.span_R + z[:, :, None] - dist[None]) / self.span_R).clamp(0, 1)
-        return torch.log(m + 1e-6).unsqueeze(1)  # (B, 1, T, T) additive bias
+        return torch.log(m + 1e-6).unsqueeze(1)  # (B, 1, T, T) additive bias (χ_z·exp(β))
 
     def forward(self, x):
         bias = self._soft_mask_bias(x)

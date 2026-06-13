@@ -62,8 +62,10 @@ class TPWNGConfig(PretrainedConfig):
         self.use_nvp = use_nvp
         self.clip_model_name = clip_model_name
         self.clip_pretrained = clip_pretrained
+        # official UCF label_map names (Normal-first); Capitalized because CLIP's
+        # BPE tokenization is case-sensitive (matches the vadclip faithful fix).
         self.class_names = class_names or [
-            "normal", "abuse", "arrest", "arson", "assault", "burglary",
-            "explosion", "fighting", "roadAccidents", "robbery", "shooting",
-            "shoplifting", "stealing", "vandalism",
+            "Normal", "Abuse", "Arrest", "Arson", "Assault", "Burglary",
+            "Explosion", "Fighting", "RoadAccidents", "Robbery", "Shooting",
+            "Shoplifting", "Stealing", "Vandalism",
         ]
