@@ -172,3 +172,9 @@ checkpoints/*
 # local tooling
 .omc/
 .vscode/
+
+# external reference repos (faithful-port source)
+.reference/
+
+# pretrained weights (large binaries: mgfn/vadclip ckpts, i3d caffe2 pkls)
+pretrained/

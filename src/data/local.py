@@ -13,7 +13,8 @@ See ``docs/DATA_LOCAL.md``. ``build_datasets_local`` returns the same
 """
 
 import os
-from typing import Dict, List, Optional
+import zipfile
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -94,8 +95,72 @@ def _load_i3d(root: str, mode: str) -> Dict[str, np.ndarray]:
     return out
 
 
+# ---- zip-direct I3D (read the MGFN-provided {train,test}.zip in place; "B") ----
+def _dataset_root(root: str, data_cfg) -> str:
+    """``<root>/<dataset_dir>`` (the dir holding the zips + gt + UCFClipFeatures)."""
+    sub = getattr(data_cfg, "dataset_dir", "ucf_crime")
+    root = os.path.expanduser(root)
+    return os.path.join(root, sub) if sub else root
+
+
+def _i3d_zip_path(root: str, data_cfg, mode: str) -> Optional[str]:
+    p = os.path.join(_dataset_root(root, data_cfg), f"{mode}.zip")
+    return p if os.path.exists(p) else None
+
+
+def _zip_feature_values(
+    path: str, dynamic: bool
+) -> Tuple[List[str], Dict, Optional[callable]]:
+    """``(names, values, open_func)`` from a per-video ``.npy`` zip.
+
+    ``dynamic`` keeps ``ZipInfo`` (lazy ``np.load`` via ``open_func``); otherwise
+    eagerly loads arrays into memory.
+    """
+    z = zipfile.ZipFile(path)
+    infos = [i for i in z.infolist() if not i.is_dir() and i.filename.endswith(".npy")]
+    names = [i.filename.split("/")[-1] for i in infos]
+    if dynamic:
+        return names, {n: i for n, i in zip(names, infos)}, z.open
+    return names, {n: np.load(z.open(i)) for n, i in zip(names, infos)}, None
+
+
 def has_local(root: str, backbone: str, mode: str) -> bool:
     return bool(_list_npy(os.path.join(os.path.expanduser(root), backbone, mode)))
+
+
+def has_local_i3d_zip(root: str, data_cfg, mode: str = "train") -> bool:
+    return _i3d_zip_path(root, data_cfg, mode) is not None
+
+
+def _build_i3d_from_zip(root: str, data_cfg):
+    """Build ``({normal, abnormal}, test)`` directly from the local I3D zips."""
+    dynamic = bool(getattr(data_cfg, "dynamic_load", True))
+    tr_zip = _i3d_zip_path(root, data_cfg, "train")
+    te_zip = _i3d_zip_path(root, data_cfg, "test")
+    if tr_zip is None or te_zip is None:
+        raise FileNotFoundError(
+            f"missing {'train' if tr_zip is None else 'test'}.zip under "
+            f"{_dataset_root(root, data_cfg)} (see docs/DATA_LOCAL.md)"
+        )
+
+    names, vals, opn = _zip_feature_values(tr_zip, dynamic)
+    normal = [n for n in names if "Normal" in n]
+    abnormal = [n for n in names if "Normal" not in n]
+    train = {
+        "normal": FeatureDataset(
+            normal, {f: vals[f] for f in normal}, open_func=opn, with_magnitude=True
+        ),
+        "abnormal": FeatureDataset(
+            abnormal, {f: vals[f] for f in abnormal}, open_func=opn, with_magnitude=True
+        ),
+    }
+
+    s_names, s_vals, s_opn = _zip_feature_values(te_zip, dynamic)
+    gt = _align_gt(s_names, _load_ground_truth(data_cfg))
+    test = FeatureDataset(
+        s_names, s_vals, labels=gt, open_func=s_opn, with_magnitude=True
+    )
+    return train, test
 
 
 def build_datasets_local(data_cfg):
@@ -103,6 +168,12 @@ def build_datasets_local(data_cfg):
     root = os.path.expanduser(getattr(data_cfg, "root", "~/data/wsad"))
     backbone = getattr(data_cfg, "backbone", "i3d")
     with_mag = backbone == "i3d"
+
+    # I3D: prefer per-video npy dirs (i3d/{train,test}); else read the local
+    # MGFN {train,test}.zip in place ("B": zip-direct, no extraction/duplication).
+    if backbone == "i3d" and not _list_npy(os.path.join(root, "i3d", "train")):
+        if has_local_i3d_zip(root, data_cfg, "train"):
+            return _build_i3d_from_zip(root, data_cfg)
     length = getattr(data_cfg, "clip_length", 256)
     n_seg = getattr(data_cfg, "segment", None)
     single_crop = getattr(data_cfg, "single_crop", True)
@@ -126,27 +197,64 @@ def build_datasets_local(data_cfg):
     }
 
     test_vals = load("test")
-    gt = _load_ground_truth(data_cfg)
+    gt = _align_gt(list(test_vals), _load_ground_truth(data_cfg))
     test = FeatureDataset(
         list(test_vals), test_vals, labels=gt, with_magnitude=with_mag
     )
     return train, test
 
 
+def _bare_vid(fname: str) -> str:
+    """Backbone-agnostic video id: drop ext, an ``_i3d`` tag, and a ``__<crop>``.
+
+    ``Abuse028_x264_i3d.npy`` and ``Abuse028_x264__0.npy`` -> ``Abuse028_x264``.
+    """
+    b = fname[:-4] if fname.endswith(".npy") else fname
+    if b.endswith("_i3d"):
+        b = b[: -len("_i3d")]
+    return b.split("__")[0]
+
+
+def _align_gt(test_keys: List[str], gt: Dict[str, list]) -> Dict[str, list]:
+    """Re-key ``gt`` to the dataset's exact test filenames via the bare video id.
+
+    Resolves the I3D-keyed (``<Vid>_i3d.npy``) ground truth against CLIP per-crop
+    filenames (``<Vid>_x264__0.npy``) — the documented CLIP gt-alignment gap.
+    """
+    gt_by_vid = {_bare_vid(k): v for k, v in gt.items()}
+    return {k: gt_by_vid[_bare_vid(k)] for k in test_keys if _bare_vid(k) in gt_by_vid}
+
+
+def _local_ground_truth_path(data_cfg) -> Optional[str]:
+    """Explicit ``data.ground_truth``, else ``<root>/<dataset_dir>/ground_truth.json``."""
+    gt = getattr(data_cfg, "ground_truth", None)
+    if gt:
+        gt = os.path.expanduser(str(gt))
+        if os.path.exists(gt):
+            return gt
+    root = getattr(data_cfg, "root", "~/data/wsad")
+    cand = os.path.join(_dataset_root(root, data_cfg), "ground_truth.json")
+    return cand if os.path.exists(cand) else None
+
+
 def _load_ground_truth(data_cfg):
-    """Frame-level GT (backbone-agnostic); reuse the HF i3d ``ground_truth.json``."""
+    """Frame-level GT (backbone-agnostic). Prefer the LOCAL ``ground_truth.json``
+    (verified 290/290 aligned with the I3D test zip; keys ``<Vid>_i3d.npy``);
+    fall back to the HF i3d dataset only when no local file is present."""
     import json
 
-    from huggingface_hub import hf_hub_download
+    path = _local_ground_truth_path(data_cfg)
+    if path is None:
+        from huggingface_hub import hf_hub_download
 
-    from src.data.features import DEFAULT_FEATURE_HUB
+        from src.data.features import DEFAULT_FEATURE_HUB
 
-    path = hf_hub_download(
-        repo_id=DEFAULT_FEATURE_HUB,
-        filename="ground_truth.json",
-        repo_type="dataset",
-        cache_dir=getattr(data_cfg, "cache_dir", None),
-    )
+        path = hf_hub_download(
+            repo_id=DEFAULT_FEATURE_HUB,
+            filename="ground_truth.json",
+            repo_type="dataset",
+            cache_dir=getattr(data_cfg, "cache_dir", None),
+        )
     # keys may carry an extension/suffix; FeatureDataset looks up by exact fname,
     # so normalize both sides to the bare video id at lookup time is the caller's job.
     return json.load(open(path))

@@ -42,15 +42,18 @@ def build_datasets(data_cfg) -> tuple:
     else HF. CLIP backbones are local-only (no HF CLIP cache yet); see
     ``docs/DATA_LOCAL.md``.
     """
-    from src.data.local import build_datasets_local, has_local
+    from src.data.local import build_datasets_local, has_local, has_local_i3d_zip
 
     source = getattr(data_cfg, "source", "hub")
     backbone = getattr(data_cfg, "backbone", "i3d")
     root = getattr(data_cfg, "root", "~/data/wsad")
 
-    use_local = source == "local" or (
-        source == "auto" and (backbone == "clip" or has_local(root, backbone, "train"))
+    local_present = (
+        backbone == "clip"
+        or has_local(root, backbone, "train")
+        or (backbone == "i3d" and has_local_i3d_zip(root, data_cfg, "train"))
     )
+    use_local = source == "local" or (source == "auto" and local_present)
     if use_local:
         return build_datasets_local(data_cfg)
 
