@@ -4,8 +4,8 @@ official gt_ucf.npy, using the official ucf_test.py protocol. Reports AUC1/AUC2
 for both and the worst per-frame divergence.
 
 Run from .reference/VadCLIP/src as cwd:
-  cd .reference/VadCLIP/src && PYTHONPATH=.:/home/jinmang2/wsad \
-    conda run -n balaenoptera python /home/jinmang2/wsad/scripts/eval_vadclip_ucf.py
+  cd .reference/VadCLIP/src && PYTHONPATH=.:<repo> \
+    conda run -n balaenoptera python <repo>/scripts/eval_vadclip_ucf.py
 """
 
 import os
@@ -16,8 +16,9 @@ import pandas as pd
 import torch
 from sklearn.metrics import average_precision_score, roc_auc_score
 
-REF = "/home/jinmang2/wsad/.reference/VadCLIP/src"
-ROOT = "/home/jinmang2/wsad"
+ROOT = os.environ.get("WSAD_ROOT") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA = os.path.expanduser(os.environ.get("WSAD_DATA", "~/data/wsad"))
+REF = f"{ROOT}/.reference/VadCLIP/src"
 sys.path.insert(0, REF)
 
 import clip.clip as clipmod  # noqa: E402
@@ -34,7 +35,7 @@ from src.models.vadclip.modeling_vadclip import (  # noqa: E402
 CKPT = f"{ROOT}/pretrained/vadclip/model_ucf.pth"
 TESTCSV = f"{REF}/../list/ucf_CLIP_rgbtest.csv"
 GT = f"{REF}/../list/gt_ucf.npy"
-CLIPDIR = "/home/jinmang2/data/wsad/ucf_crime/UCFClipFeatures"
+CLIPDIR = f"{DATA}/ucf_crime/UCFClipFeatures"
 MAXLEN = 256
 device = "cuda"
 

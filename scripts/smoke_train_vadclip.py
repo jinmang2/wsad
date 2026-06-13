@@ -16,7 +16,7 @@ from src.models.vadclip.configuration_vadclip import VadCLIPConfig
 from src.models.vadclip.modeling_vadclip import VadCLIPForVideoAnomalyDetection
 from src.trainer import WSVADTrainer
 
-CLIP_TRAIN = os.path.expanduser("~/data/wsad/clip/train")
+CLIP_TRAIN = os.path.join(os.path.expanduser(os.environ.get("WSAD_DATA", "~/data/wsad")), "clip/train")
 N_PER = 8
 
 

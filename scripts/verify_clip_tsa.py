@@ -6,17 +6,18 @@ is shown by transferring identical weights from the official ``Model``
 shared RNG seed (PerturbedTopK draws Gaussian noise; same seed -> same noise).
 
 Run from .reference/CLIP-TSA as cwd:
-  cd .reference/CLIP-TSA && PYTHONPATH=.:/home/jinmang2/wsad \
-    conda run -n balaenoptera python /home/jinmang2/wsad/scripts/verify_clip_tsa.py
+  cd .reference/CLIP-TSA && PYTHONPATH=.:<repo> \
+    conda run -n balaenoptera python <repo>/scripts/verify_clip_tsa.py
 """
 
+import os
 import sys
 from types import SimpleNamespace
 
 import numpy as np
 import torch
 
-ROOT = "/home/jinmang2/wsad"
+ROOT = os.environ.get("WSAD_ROOT") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, f"{ROOT}/.reference/CLIP-TSA")
 sys.path.insert(0, ROOT)
 

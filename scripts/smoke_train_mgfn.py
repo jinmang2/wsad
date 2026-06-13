@@ -4,6 +4,7 @@ Proves the Accelerate training path runs end-to-end on real I3D features:
 build datasets -> dual normal/abnormal loader -> forward -> loss -> backward.
 """
 
+import os
 import zipfile
 
 import numpy as np
@@ -15,7 +16,7 @@ from src.models.mgfn.configuration_mgfn import MGFNConfig
 from src.models.mgfn.modeling_mgfn import MGFNForVideoAnomalyDetection
 from src.trainer import WSVADTrainer
 
-ROOT = "/home/jinmang2/data/wsad/ucf_crime"
+ROOT = os.path.join(os.path.expanduser(os.environ.get("WSAD_DATA", "~/data/wsad")), "ucf_crime")
 N_PER = 8  # videos per class for the smoke subset
 
 z = zipfile.ZipFile(f"{ROOT}/train.zip")

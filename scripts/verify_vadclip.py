@@ -20,12 +20,16 @@ from src.models.vadclip.modeling_vadclip import (
     convert_official_vadclip,
 )
 
-REF = "/home/jinmang2/wsad/.reference/VadCLIP/src"
+import os  # noqa: E402
+
+ROOT = os.environ.get("WSAD_ROOT") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA = os.path.expanduser(os.environ.get("WSAD_DATA", "~/data/wsad"))
+REF = f"{ROOT}/.reference/VadCLIP/src"
 sys.path.insert(0, REF)
 import utils.tools as tools  # noqa: E402  (official process_split / mask)
 
-CKPT = "/home/jinmang2/wsad/pretrained/vadclip/model_ucf.pth"
-ORACLE = "/home/jinmang2/wsad/.reference/vadclip_oracle.npz"
+CKPT = f"{ROOT}/pretrained/vadclip/model_ucf.pth"
+ORACLE = f"{ROOT}/.reference/vadclip_oracle.npz"
 VIDS = ["Abuse028_x264", "RoadAccidents133_x264", "Normal_Videos_867_x264"]
 MAXLEN = 256
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -62,7 +66,7 @@ def lengths_for(length):
 
 @torch.no_grad()
 def run(vid):
-    feat = np.load(f"/home/jinmang2/data/wsad/clip/test/{vid}__0.npy").astype(np.float32)
+    feat = np.load(f"{DATA}/clip/test/{vid}__0.npy").astype(np.float32)
     split, clip_length = tools.process_split(feat, MAXLEN)
     visual = torch.tensor(split)
     if int(clip_length) < MAXLEN:

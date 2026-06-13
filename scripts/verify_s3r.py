@@ -6,15 +6,16 @@ official ``S3R`` weights into the repo port (names match 1:1) and comparing the
 off -> deterministic).
 
 Run from .reference/S3R as cwd:
-  cd .reference/S3R && PYTHONPATH=.:/home/jinmang2/wsad \
-    conda run -n balaenoptera python /home/jinmang2/wsad/scripts/verify_s3r.py
+  cd .reference/S3R && PYTHONPATH=.:<repo> \
+    conda run -n balaenoptera python <repo>/scripts/verify_s3r.py
 """
 
+import os
 import sys
 
 import torch
 
-ROOT = "/home/jinmang2/wsad"
+ROOT = os.environ.get("WSAD_ROOT") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, f"{ROOT}/.reference/S3R")
 sys.path.insert(0, ROOT)
 

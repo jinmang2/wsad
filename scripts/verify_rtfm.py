@@ -5,15 +5,16 @@ No official ckpt is shipped, so equivalence is shown by transferring the officia
 and comparing eval-mode forward (dropout off -> deterministic).
 
 Run from .reference/RTFM as cwd:
-  cd .reference/RTFM && PYTHONPATH=.:/home/jinmang2/wsad \
-    conda run -n balaenoptera python /home/jinmang2/wsad/scripts/verify_rtfm.py
+  cd .reference/RTFM && PYTHONPATH=.:<repo> \
+    conda run -n balaenoptera python <repo>/scripts/verify_rtfm.py
 """
 
+import os
 import sys
 
 import torch
 
-ROOT = "/home/jinmang2/wsad"
+ROOT = os.environ.get("WSAD_ROOT") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, f"{ROOT}/.reference/RTFM")
 sys.path.insert(0, ROOT)
 

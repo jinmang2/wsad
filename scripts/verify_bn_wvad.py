@@ -5,8 +5,8 @@ repo port, compares eval-path scores (distance_sum * normal_scores) on identical
 random 1024-d input (eval = BN running stats, deterministic).
 
 Run from .reference/BN-WVAD as cwd:
-  cd .reference/BN-WVAD && PYTHONPATH=.:/home/jinmang2/wsad \
-    conda run -n balaenoptera python /home/jinmang2/wsad/scripts/verify_bn_wvad.py
+  cd .reference/BN-WVAD && PYTHONPATH=.:<repo> \
+    conda run -n balaenoptera python <repo>/scripts/verify_bn_wvad.py
 """
 
 import sys
@@ -24,7 +24,9 @@ for name in ("ipdb", "visdom", "wandb"):
             sys.modules[name].set_trace = lambda *a, **k: None
             sys.modules[name].Visdom = object
 
-ROOT = "/home/jinmang2/wsad"
+import os
+
+ROOT = os.environ.get("WSAD_ROOT") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, f"{ROOT}/.reference/BN-WVAD")
 sys.path.insert(0, ROOT)
 

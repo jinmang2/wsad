@@ -5,8 +5,8 @@ and the repo port, then compares the eval-path frame scores on identical random
 1024-d input (the eval path is deterministic — no variational sampling).
 
 Run from .reference/UR-DMU as cwd:
-  cd .reference/UR-DMU && PYTHONPATH=.:/home/jinmang2/wsad \
-    conda run -n balaenoptera python /home/jinmang2/wsad/scripts/verify_ur_dmu.py
+  cd .reference/UR-DMU && PYTHONPATH=.:<repo> \
+    conda run -n balaenoptera python <repo>/scripts/verify_ur_dmu.py
 """
 
 import sys
@@ -24,7 +24,9 @@ for name in ("ipdb", "visdom"):
             sys.modules[name].set_trace = lambda *a, **k: None
             sys.modules[name].Visdom = object
 
-ROOT = "/home/jinmang2/wsad"
+import os
+
+ROOT = os.environ.get("WSAD_ROOT") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REF = f"{ROOT}/.reference/UR-DMU"
 sys.path.insert(0, REF)
 sys.path.insert(0, ROOT)

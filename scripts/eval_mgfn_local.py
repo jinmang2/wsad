@@ -5,6 +5,7 @@ frame-level ROC-AUC. Bypasses the HF force_download in build_feature_dataset.
 """
 
 import json
+import os
 import zipfile
 
 import numpy as np
@@ -17,7 +18,7 @@ from src.data.features import FeatureDataset
 from src.models.mgfn.configuration_mgfn import MGFNConfig
 from src.models.mgfn.modeling_mgfn import MGFNForVideoAnomalyDetection
 
-ROOT = "/home/jinmang2/data/wsad/ucf_crime"
+ROOT = os.path.join(os.path.expanduser(os.environ.get("WSAD_DATA", "~/data/wsad")), "ucf_crime")
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 print("device:", DEVICE)
 
