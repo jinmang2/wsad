@@ -27,6 +27,7 @@ class S3RConfig(PretrainedConfig):
         self,
         feature_size: int = 2048,
         dict_size: int = 64,
+        modality: str = "taskaware",
         reduction: int = 4,
         denormal_reduction: int = 16,
         k: int = 3,
@@ -41,6 +42,7 @@ class S3RConfig(PretrainedConfig):
         super().__init__(**kwargs)
         self.feature_size = feature_size
         self.dict_size = dict_size
+        self.modality = modality
         self.reduction = reduction
         self.denormal_reduction = denormal_reduction
         self.k = k

@@ -20,7 +20,6 @@ from dataclasses import dataclass
 from typing import Optional
 
 import torch
-import torch.nn.functional as F
 from torch import nn
 from transformers import PreTrainedModel
 from transformers.utils import ModelOutput
@@ -73,7 +72,7 @@ class NonLocalBlock1D(nn.Module):
         phi_x = self.phi(x).view(b, self.inter_dim, -1)  # (B, C', T)
 
         f = torch.matmul(theta_x, phi_x)  # (B, T, T)
-        f_div_c = F.softmax(f, dim=-1)
+        f_div_c = f / f.size(-1)  # official RTFM: dot-product / N (NOT softmax)
 
         y = torch.matmul(f_div_c, g_x)  # (B, T, C')
         y = y.permute(0, 2, 1).contiguous().view(b, self.inter_dim, -1)
