@@ -5,7 +5,9 @@ with the train/test split encoded in ``list/ucf_CLIP_rgbtest.csv`` (not by folde
 This symlinks each ``.npy`` into ``<dst>/train`` or ``<dst>/test`` so the loader in
 ``src/data/local.py`` can walk them. See ``docs/DATA_LOCAL.md``.
 
-    python scripts/prepare_clip_features.py --src /path/UCFClipFeatures --dst ~/data/wsad/clip
+    python scripts/prepare_clip_features.py \
+        --src ~/data/wsad/ucf_crime/features/clip/_byclass \
+        --dst ~/data/wsad/ucf_crime/features/clip
     # optional: --test-list list/ucf_CLIP_rgbtest.csv (else fetched from VadCLIP repo)
 """
 

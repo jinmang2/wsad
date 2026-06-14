@@ -72,10 +72,35 @@ def _list_npy(d: str) -> List[str]:
     return sorted(f for f in os.listdir(d) if f.endswith(".npy")) if os.path.isdir(d) else []
 
 
+# ---- layout resolvers: dataset-keyed `features/{i3d,clip}` + `annotations/`,
+# with legacy fallback (top-level `clip/`, dataset-root `*.zip`/`ground_truth.json`).
+def _features_root(root: str, data_cfg) -> str:
+    return os.path.join(_dataset_root(root, data_cfg), "features")
+
+
+def _clip_dir(root: str, data_cfg, mode: str) -> str:
+    new = os.path.join(_features_root(root, data_cfg), "clip", mode)
+    if os.path.isdir(new):
+        return new
+    return os.path.join(os.path.expanduser(root), "clip", mode)  # legacy top-level
+
+
+def _i3d_npy_dir(root: str, data_cfg, mode: str) -> str:
+    new = os.path.join(_features_root(root, data_cfg), "i3d", mode)
+    if os.path.isdir(new):
+        return new
+    return os.path.join(os.path.expanduser(root), "i3d", mode)  # legacy top-level
+
+
 def _load_clip(
-    root: str, mode: str, length: Optional[int], n_seg: Optional[int], single_crop: bool
+    root: str,
+    mode: str,
+    length: Optional[int],
+    n_seg: Optional[int],
+    single_crop: bool,
+    data_cfg=None,
 ) -> Dict[str, np.ndarray]:
-    d = os.path.join(root, "clip", mode)
+    d = _clip_dir(root, data_cfg, mode)
     out = {}
     for f in _list_npy(d):
         if single_crop and not _crop0(f):
@@ -87,8 +112,8 @@ def _load_clip(
     return out
 
 
-def _load_i3d(root: str, mode: str) -> Dict[str, np.ndarray]:
-    d = os.path.join(root, "i3d", mode)
+def _load_i3d(root: str, mode: str, data_cfg=None) -> Dict[str, np.ndarray]:
+    d = _i3d_npy_dir(root, data_cfg, mode)
     out = {f: np.load(os.path.join(d, f)) for f in _list_npy(d)}
     if not out:
         raise FileNotFoundError(f"no I3D .npy under {d} (see docs/DATA_LOCAL.md)")
@@ -104,8 +129,12 @@ def _dataset_root(root: str, data_cfg) -> str:
 
 
 def _i3d_zip_path(root: str, data_cfg, mode: str) -> Optional[str]:
-    p = os.path.join(_dataset_root(root, data_cfg), f"{mode}.zip")
-    return p if os.path.exists(p) else None
+    # new: <dataset>/features/i3d/<mode>.zip ; legacy: <dataset>/<mode>.zip
+    new = os.path.join(_features_root(root, data_cfg), "i3d", f"{mode}.zip")
+    if os.path.exists(new):
+        return new
+    legacy = os.path.join(_dataset_root(root, data_cfg), f"{mode}.zip")
+    return legacy if os.path.exists(legacy) else None
 
 
 def _zip_feature_values(
@@ -124,8 +153,14 @@ def _zip_feature_values(
     return names, {n: np.load(z.open(i)) for n, i in zip(names, infos)}, None
 
 
-def has_local(root: str, backbone: str, mode: str) -> bool:
-    return bool(_list_npy(os.path.join(os.path.expanduser(root), backbone, mode)))
+def has_local(root: str, backbone: str, mode: str, data_cfg=None) -> bool:
+    if backbone == "clip":
+        d = _clip_dir(root, data_cfg, mode)
+    elif backbone == "i3d":
+        d = _i3d_npy_dir(root, data_cfg, mode)
+    else:
+        d = os.path.join(os.path.expanduser(root), backbone, mode)
+    return bool(_list_npy(d))
 
 
 def has_local_i3d_zip(root: str, data_cfg, mode: str = "train") -> bool:
@@ -171,7 +206,7 @@ def build_datasets_local(data_cfg):
 
     # I3D: prefer per-video npy dirs (i3d/{train,test}); else read the local
     # MGFN {train,test}.zip in place ("B": zip-direct, no extraction/duplication).
-    if backbone == "i3d" and not _list_npy(os.path.join(root, "i3d", "train")):
+    if backbone == "i3d" and not _list_npy(_i3d_npy_dir(root, data_cfg, "train")):
         if has_local_i3d_zip(root, data_cfg, "train"):
             return _build_i3d_from_zip(root, data_cfg)
     length = getattr(data_cfg, "clip_length", 256)
@@ -180,8 +215,8 @@ def build_datasets_local(data_cfg):
 
     def load(mode):
         if backbone == "clip":
-            return _load_clip(root, mode, length, n_seg, single_crop)
-        return _load_i3d(root, mode)
+            return _load_clip(root, mode, length, n_seg, single_crop, data_cfg)
+        return _load_i3d(root, mode, data_cfg)
 
     train_vals = load("train")
     names = list(train_vals)
@@ -233,8 +268,14 @@ def _local_ground_truth_path(data_cfg) -> Optional[str]:
         if os.path.exists(gt):
             return gt
     root = getattr(data_cfg, "root", "~/data/wsad")
-    cand = os.path.join(_dataset_root(root, data_cfg), "ground_truth.json")
-    return cand if os.path.exists(cand) else None
+    ds = _dataset_root(root, data_cfg)
+    for cand in (
+        os.path.join(ds, "annotations", "ground_truth.json"),  # new layout
+        os.path.join(ds, "ground_truth.json"),  # legacy dataset-root
+    ):
+        if os.path.exists(cand):
+            return cand
+    return None
 
 
 def _load_ground_truth(data_cfg):

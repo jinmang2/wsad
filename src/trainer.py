@@ -50,7 +50,7 @@ def build_datasets(data_cfg) -> tuple:
 
     local_present = (
         backbone == "clip"
-        or has_local(root, backbone, "train")
+        or has_local(root, backbone, "train", data_cfg)
         or (backbone == "i3d" and has_local_i3d_zip(root, data_cfg, "train"))
     )
     use_local = source == "local" or (source == "auto" and local_present)

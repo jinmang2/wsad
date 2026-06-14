@@ -35,7 +35,7 @@ from src.models.vadclip.modeling_vadclip import (  # noqa: E402
 CKPT = f"{ROOT}/pretrained/vadclip/model_ucf.pth"
 TESTCSV = f"{REF}/../list/ucf_CLIP_rgbtest.csv"
 GT = f"{REF}/../list/gt_ucf.npy"
-CLIPDIR = f"{DATA}/ucf_crime/UCFClipFeatures"
+CLIPDIR = f"{DATA}/ucf_crime/features/clip/_byclass"
 MAXLEN = 256
 device = "cuda"
 
