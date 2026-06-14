@@ -19,7 +19,13 @@ from src.trainer import WSVADTrainer
 ROOT = os.path.join(os.path.expanduser(os.environ.get("WSAD_DATA", "~/data/wsad")), "ucf_crime")
 N_PER = 8  # videos per class for the smoke subset
 
-z = zipfile.ZipFile(f"{ROOT}/train.zip")
+# resolve new features/i3d layout (legacy dataset-root fallback) via loader resolver
+from types import SimpleNamespace
+
+from src.data.local import _i3d_zip_path
+
+_cfg = SimpleNamespace(root=os.path.dirname(ROOT), dataset_dir="ucf_crime")
+z = zipfile.ZipFile(_i3d_zip_path(os.path.dirname(ROOT), _cfg, "train"))
 infos = [i for i in z.infolist() if not i.is_dir() and i.filename.endswith(".npy")]
 names = [i.filename.split("/")[-1] for i in infos]
 values = {n: i for n, i in zip(names, infos)}

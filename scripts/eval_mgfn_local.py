@@ -29,12 +29,18 @@ m, u = model.load_state_dict(convert(official), strict=False)
 assert not m and not u, (len(m), len(u))
 model = model.to(DEVICE).eval()
 
-# --- data (local, dynamic load) ---
-z = zipfile.ZipFile(f"{ROOT}/test.zip")
+# --- data (local, dynamic load) — resolve the new features/i3d + annotations
+# layout (legacy dataset-root fallback) via the loader's own resolvers ---
+from types import SimpleNamespace
+
+from src.data.local import _i3d_zip_path, _local_ground_truth_path
+
+_cfg = SimpleNamespace(root=os.path.dirname(ROOT), dataset_dir="ucf_crime", ground_truth=None)
+z = zipfile.ZipFile(_i3d_zip_path(os.path.dirname(ROOT), _cfg, "test"))
 infos = [i for i in z.infolist() if not i.is_dir()]
 filenames = [i.filename.split("/")[-1] for i in infos]
 values = {fn: info for fn, info in zip(filenames, infos)}
-gt = json.load(open(f"{ROOT}/ground_truth.json"))
+gt = json.load(open(_local_ground_truth_path(_cfg)))
 ds = FeatureDataset(filenames, values, labels=gt, open_func=z.open, with_magnitude=True)
 print("test videos:", len(ds))
 
