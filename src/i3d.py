@@ -3,7 +3,6 @@ from typing import Callable, Tuple
 import torch
 import torch.nn.functional as F
 from huggingface_hub import hf_hub_download
-from pytorchvideo.models.resnet import create_resnet
 from torch import nn
 
 repo_id = "jinmang2/test_video_fe"
@@ -334,6 +333,11 @@ def build_i3d_feature_extractor(
     if model_name == "tushar-n-baseline":
         model = I3Res50(use_nl=False)
     elif model_name == "i3d_8x8_r50":
+        # pytorchvideo is only needed for this SlowFast variant; import lazily so
+        # the self-contained tushar-n / nonlocal I3Res50 path works without it
+        # (pytorchvideo pins old torch and conflicts with the training stack).
+        from pytorchvideo.models.resnet import create_resnet
+
         model = create_resnet(
             stem_conv_kernel_size=(5, 7, 7),
             stage1_pool=nn.MaxPool3d,
