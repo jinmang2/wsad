@@ -48,6 +48,7 @@ def plot_anomaly_scores(
     title: Optional[str] = None,
     xlabel: str = "snippet / frame index",
     ylabel: str = "anomaly score",
+    legend: bool = True,
     save_path: Optional[str] = None,
     show: bool = False,
 ):
@@ -77,8 +78,11 @@ def plot_anomaly_scores(
     ax.plot(x, scores, color="#1f77b4", lw=1.5, label="anomaly score")
 
     for i, (s, e) in enumerate(_coerce_gt(gt, len(scores))):
-        ax.axvspan(s, e, color="#d62728", alpha=0.2,
+        # light-orange GT region with dashed red boundaries (paper convention)
+        ax.axvspan(s, e, color="#ff9e4a", alpha=0.35,
                    label="ground truth" if i == 0 else None)
+        for boundary in (s, e):
+            ax.axvline(boundary, color="#d62728", ls="--", lw=1.0)
 
     if threshold is not None:
         ax.axhline(threshold, color="gray", ls="--", lw=1, label="threshold")
@@ -90,7 +94,8 @@ def plot_anomaly_scores(
     ax.set_ylabel(ylabel)
     if title:
         ax.set_title(title)
-    ax.legend(loc="upper right", fontsize=8)
+    if legend:
+        ax.legend(loc="upper right", fontsize=8)
     fig.tight_layout()
 
     if save_path is not None:
