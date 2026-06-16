@@ -129,6 +129,9 @@ class TPWNGPreTrainedModel(PreTrainedModel):
 
 @MODELS.register("tpwng")
 class TPWNGForVideoAnomalyDetection(TPWNGPreTrainedModel):
+    # text-prompt-with-normality-guidance: uses a CLIP text encoder
+    requires_text_aligned = True
+
     def __init__(self, config: TPWNGConfig):
         super().__init__(config)
         d = config.embed_dim

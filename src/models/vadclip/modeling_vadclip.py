@@ -179,6 +179,9 @@ class VadCLIPPreTrainedModel(PreTrainedModel):
 
 @MODELS.register("vadclip")
 class VadCLIPForVideoAnomalyDetection(VadCLIPPreTrainedModel):
+    # uses a CLIP text encoder (prompts) -> needs a text-aligned backbone
+    requires_text_aligned = True
+
     def __init__(self, config: VadCLIPConfig):
         super().__init__(config)
         vw = config.visual_width
