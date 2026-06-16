@@ -12,8 +12,6 @@ from src.i3d import build_i3d_feature_extractor
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-import decord
-
 
 def load_feature_extractor(
     model_name: str = "i3d_8x8_r50", device: str = "cpu"
@@ -90,6 +88,8 @@ def extract_features_from_video(
             # Among the transforms of `TenCropVideoFrameDataset`, `LoopPad` forcibly pads clips lower than
             # `frames_per_clip`(default: 16), so segment_length is designated as a multiple of 16.
             seg_len = 16 * 188  # 3,008
+            import decord  # lazy: only the legacy big-video path needs it
+
             # read video frames
             vr = decord.VideoReader(uri=sample["video_path"])
             segments = []
@@ -160,6 +160,28 @@ def segment_features(feat_output_dir: str, seg_output_dir: str, seg_length: int 
 
 
 def main(args: argparse.Namespace):
+    # Backbone-agnostic path (issue #17): dispatch to any registered extractor and
+    # cache `<stem>_<backbone>.npy`. The legacy i3d_8x8_r50 path below is kept for
+    # `--backbone` unset so existing reproduction stays byte-identical.
+    if args.backbone:
+        from src.features import build_extractor
+        from src.features.extract import run_extraction
+
+        extractor = build_extractor(args.backbone, device=args.device)
+        dset = load_dataset(args.repo_id, config_name=args.config_name)
+        feat_output_dir = os.path.join(args.output_dir, f"features_{args.backbone}")
+        subsets = (
+            dset.items()
+            if isinstance(dset, datasets.DatasetDict)
+            else [(None, dset)]
+        )
+        for mode, dsub in subsets:
+            out_dir = (
+                feat_output_dir if mode is None else os.path.join(feat_output_dir, mode)
+            )
+            run_extraction(dsub, extractor, out_dir, args.backbone)
+        return
+
     feat_output_dir = os.path.join(args.output_dir, "anomaly_features")
     # anomaly = load_ucf_crime_dataset(args.repo_id, args.cache_dir, args.config_name)
     ucf_crime_anomaly_dset = load_dataset("jinmang2/ucf_crime", config_name="anomaly")
@@ -203,7 +225,15 @@ if __name__ == "__main__":
         "--model_name",
         type=str,
         default="i3d_8x8_r50",
-        help="Feature extraction model name.",
+        help="Legacy pytorchvideo I3D model name (used only when --backbone is unset).",
+    )
+    parser.add_argument(
+        "--backbone",
+        type=str,
+        default=None,
+        help="Registered backbone to dispatch on (i3d, clip, videomae, ...). "
+        "When set, uses the backbone-agnostic extractor and caches "
+        "<stem>_<backbone>.npy; when unset, runs the legacy I3D path.",
     )
     parser.add_argument(
         "--output_dir",
