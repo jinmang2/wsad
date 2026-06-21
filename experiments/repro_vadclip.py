@@ -37,14 +37,14 @@ from src.eval_matrix import evaluate
 from src.models.vadclip.modeling_vadclip import load_pretrained_clip_text
 from src.trainer import WSVADTrainer, build_datasets
 
-SEED = 234
+SEED = int(os.environ.get("REPRO_SEED", 234))  # official default 234; sweep for variance
 MAX_EPOCH = int(os.environ.get("REPRO_EPOCHS", 10))  # override for smoke (REPRO_EPOCHS=1)
 BATCH = 64          # per loader (normal / abnormal); official batch_size
 LR = 2e-5
 WEIGHT_DECAY = 0.01  # AdamW default (official passes no weight_decay)
 MILESTONES = [4, 8]
 GAMMA = 0.1
-OUT = "experiments/runs/vadclip_scratch"
+OUT = f"experiments/runs/vadclip_scratch/seed{os.environ.get('REPRO_SEED', 234)}"
 
 
 def set_seed(seed: int) -> None:
@@ -62,6 +62,8 @@ def main() -> None:
 
     spec = HEADS["vadclip"]
     data_cfg = _data_cfg("clip", spec)
+    # official trains on all 10 crops as separate samples (16100 rows); test single-crop
+    data_cfg.train_all_crops = True
     train_sets, test_set = build_datasets(data_cfg)
     model, _, _ = _build_model("vadclip", "clip", device)
     # from-scratch == random head + FROZEN pretrained CLIP text tower (official freezes
@@ -88,8 +90,10 @@ def main() -> None:
         num_workers=int(data_cfg.num_workers), frames_per_clip=16, mixed_precision="no",
         optimizer_name="adamw", scheduler_milestones=MILESTONES, scheduler_gamma=GAMMA,
     )
+    # official evals at step % 1280 == 0 (step = iter * batch * 2 = iter * 128) -> every
+    # 10 optimizer iters, keeping the best checkpoint across all eval points.
     best = trainer.fit(train_sets, epochs=MAX_EPOCH, eval_fn=eval_fn,
-                       select_metric="roc_auc")
+                       select_metric="roc_auc", eval_every=10)
 
     result = {
         "head": "vadclip", "backbone": "clip", "source": "from-scratch",

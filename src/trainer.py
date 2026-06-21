@@ -129,6 +129,7 @@ class WSVADTrainer:
         epochs: int = 1,
         eval_fn=None,
         select_metric: str = "roc_auc",
+        eval_every: Optional[int] = None,
     ):
         """Epoch-based training (faithful recipes that count epochs + use an LR
         schedule, e.g. VadCLIP: AdamW + MultiStepLR[4,8], 10 epochs).
@@ -136,6 +137,9 @@ class WSVADTrainer:
         ``eval_fn(model) -> {roc_auc, pr_auc}`` (e.g. a per-head
         ``src.eval_matrix.evaluate`` closure) overrides the default I3D-shaped
         ``self.evaluate``; the BEST checkpoint by ``select_metric`` is returned.
+        ``eval_every`` (optimizer steps) adds intra-epoch evals + best-checkpoint
+        selection — VadCLIP's official eval at ``step % 1280 == 0`` (~12x/epoch on
+        the 16100-sample 10-crop train), which catches a higher peak than 1/epoch.
         """
         loaders = {
             k: DataLoader(
@@ -153,6 +157,17 @@ class WSVADTrainer:
         )
 
         best = {"roc_auc": 0.0, "pr_auc": 0.0, "best_epoch": -1, "last": 0.0, "_sel": -1.0}
+
+        def _record(epoch):  # eval + keep best by select_metric
+            m = eval_fn(self.accelerator.unwrap_model(model))
+            best["last"] = m["roc_auc"]
+            sel = m.get(select_metric, m["roc_auc"])
+            if sel > best["_sel"]:
+                best.update(roc_auc=m["roc_auc"], pr_auc=m["pr_auc"], best_epoch=epoch, _sel=sel)
+            model.train()
+            return m
+
+        gstep = 0
         for epoch in range(epochs):
             model.train()
             total = 0.0
@@ -179,16 +194,15 @@ class WSVADTrainer:
                 optimizer.step()
                 optimizer.zero_grad()
                 total += out.loss.item()
+                gstep += 1
+                if eval_fn is not None and eval_every and gstep % eval_every == 0:
+                    _record(epoch)
             if self.scheduler is not None:
                 self.scheduler.step()
 
             log = {"epoch": epoch, "train_loss": total / max(len(nl), 1)}
             if eval_fn is not None:
-                m = eval_fn(self.accelerator.unwrap_model(model))
-                best["last"] = m["roc_auc"]
-                sel = m.get(select_metric, m["roc_auc"])
-                if sel > best["_sel"]:
-                    best.update(roc_auc=m["roc_auc"], pr_auc=m["pr_auc"], best_epoch=epoch, _sel=sel)
+                m = _record(epoch)
                 log.update(roc_auc=round(m["roc_auc"], 4), pr_auc=round(m["pr_auc"], 4),
                            best=round(best["roc_auc"], 4))
             elif test_dataset is not None:

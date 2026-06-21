@@ -85,11 +85,22 @@ def _clip_dir(root: str, data_cfg, mode: str) -> str:
     return os.path.join(os.path.expanduser(root), "clip", mode)  # legacy top-level
 
 
+def _i3d_variant(data_cfg) -> str:
+    """Feature-extraction variant subdir under ``features/`` (default ``i3d``).
+
+    Lets the comparison matrix select a specific I3D extraction —
+    ``i3d_tushar`` (HF tushar-n), ``i3d_pyvideo`` (HF main/pytorchvideo),
+    ``i3d_ours`` (our Gowtham re-extract) — each a self-consistent train+test set.
+    """
+    return getattr(data_cfg, "feature_variant", None) or "i3d"
+
+
 def _i3d_npy_dir(root: str, data_cfg, mode: str) -> str:
-    new = os.path.join(_features_root(root, data_cfg), "i3d", mode)
+    v = _i3d_variant(data_cfg)
+    new = os.path.join(_features_root(root, data_cfg), v, mode)
     if os.path.isdir(new):
         return new
-    return os.path.join(os.path.expanduser(root), "i3d", mode)  # legacy top-level
+    return os.path.join(os.path.expanduser(root), v, mode)  # legacy top-level
 
 
 def _load_clip(
@@ -129,8 +140,8 @@ def _dataset_root(root: str, data_cfg) -> str:
 
 
 def _i3d_zip_path(root: str, data_cfg, mode: str) -> Optional[str]:
-    # new: <dataset>/features/i3d/<mode>.zip ; legacy: <dataset>/<mode>.zip
-    new = os.path.join(_features_root(root, data_cfg), "i3d", f"{mode}.zip")
+    # new: <dataset>/features/<variant>/<mode>.zip ; legacy: <dataset>/<mode>.zip
+    new = os.path.join(_features_root(root, data_cfg), _i3d_variant(data_cfg), f"{mode}.zip")
     if os.path.exists(new):
         return new
     legacy = os.path.join(_dataset_root(root, data_cfg), f"{mode}.zip")
@@ -202,7 +213,9 @@ def build_datasets_local(data_cfg):
     """Build ``({normal, abnormal}, test)`` from ``~/data/wsad`` (local backbone)."""
     root = os.path.expanduser(getattr(data_cfg, "root", "~/data/wsad"))
     backbone = getattr(data_cfg, "backbone", "i3d")
-    with_mag = backbone == "i3d"
+    # magnitude defaults to the I3D convention; the comparison matrix overrides it
+    # so visual-magnitude heads (RTFM/MGFN/...) get a magnitude channel on CLIP too.
+    with_mag = bool(getattr(data_cfg, "with_magnitude", backbone == "i3d"))
 
     # I3D: prefer per-video npy dirs (i3d/{train,test}); else read the local
     # MGFN {train,test}.zip in place ("B": zip-direct, no extraction/duplication).
@@ -212,10 +225,14 @@ def build_datasets_local(data_cfg):
     length = getattr(data_cfg, "clip_length", 256)
     n_seg = getattr(data_cfg, "segment", None)
     single_crop = getattr(data_cfg, "single_crop", True)
+    # VadCLIP trains on ALL 10 crops as separate samples (official ucf_CLIP_rgb.csv =
+    # 1610 vids x 10 crops = 16100 rows); test stays single-crop. 10x crop augmentation.
+    train_all_crops = bool(getattr(data_cfg, "train_all_crops", False))
 
     def load(mode):
         if backbone == "clip":
-            return _load_clip(root, mode, length, n_seg, single_crop, data_cfg)
+            sc = single_crop and not (train_all_crops and mode == "train")
+            return _load_clip(root, mode, length, n_seg, sc, data_cfg)
         return _load_i3d(root, mode, data_cfg)
 
     train_vals = load("train")
