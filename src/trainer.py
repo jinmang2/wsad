@@ -82,25 +82,61 @@ class WSVADTrainer:
         num_workers: int = 2,
         frames_per_clip: int = 16,
         mixed_precision: str = "no",  # "no" | "fp16" | "bf16"
+        grad_clip_norm: Optional[float] = None,  # e.g. 1.0 for BN-WVAD (official train.py:16)
+        optimizer_name: str = "adam",  # "adam" | "adamw" (VadCLIP uses AdamW)
+        scheduler_milestones: Optional[list] = None,  # MultiStepLR epochs, e.g. [4, 8] (VadCLIP)
+        scheduler_gamma: float = 0.1,
     ):
         self.accelerator = Accelerator(mixed_precision=mixed_precision)
         self.model = model
-        self.optimizer = torch.optim.Adam(
+        opt_cls = {"adam": torch.optim.Adam, "adamw": torch.optim.AdamW}[optimizer_name.lower()]
+        self.optimizer = opt_cls(
             model.parameters(), lr=learning_rate, weight_decay=weight_decay
+        )
+        # optional per-epoch LR schedule (faithful recipes: VadCLIP MultiStepLR[4,8] x0.1).
+        # Stepped once per epoch in fit(); ignored by the step-based fit_steps path.
+        self.scheduler = (
+            torch.optim.lr_scheduler.MultiStepLR(
+                self.optimizer, milestones=list(scheduler_milestones), gamma=scheduler_gamma
+            )
+            if scheduler_milestones
+            else None
         )
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.frames_per_clip = frames_per_clip
-        self._accepts_class = (
-            "class_labels" in inspect.signature(model.forward).parameters
-        )
+        self.grad_clip_norm = grad_clip_norm
+        sig = inspect.signature(model.forward).parameters
+        self._accepts_class = "class_labels" in sig
+        # heads that mask padded frames by per-video length (VadCLIP windowed-256).
+        self._accepts_lengths = "lengths" in sig
+
+    @staticmethod
+    def _valid_lengths(feature: torch.Tensor) -> torch.Tensor:
+        """Per-video valid (non-padded) length from a windowed feature.
+
+        Clip windows are zero-padded to ``visual_length``; the real length is the
+        count of non-zero frames (official ``process_feat`` returns this length).
+        ``feature`` is ``(B, ncrops, T, D)`` or ``(B, T, D)``.
+        """
+        x = feature[:, 0] if feature.dim() == 4 else feature  # (B, T, D)
+        return (x.abs().sum(-1) > 0).sum(-1).clamp(min=1)  # (B,)
 
     def fit(
         self,
         train_datasets: Dict[str, Dataset],
         test_dataset: Optional[Dataset] = None,
         epochs: int = 1,
+        eval_fn=None,
+        select_metric: str = "roc_auc",
     ):
+        """Epoch-based training (faithful recipes that count epochs + use an LR
+        schedule, e.g. VadCLIP: AdamW + MultiStepLR[4,8], 10 epochs).
+
+        ``eval_fn(model) -> {roc_auc, pr_auc}`` (e.g. a per-head
+        ``src.eval_matrix.evaluate`` closure) overrides the default I3D-shaped
+        ``self.evaluate``; the BEST checkpoint by ``select_metric`` is returned.
+        """
         loaders = {
             k: DataLoader(
                 train_datasets[k],
@@ -116,6 +152,7 @@ class WSVADTrainer:
             self.model, self.optimizer, loaders["normal"], loaders["abnormal"]
         )
 
+        best = {"roc_auc": 0.0, "pr_auc": 0.0, "best_epoch": -1, "last": 0.0, "_sel": -1.0}
         for epoch in range(epochs):
             model.train()
             total = 0.0
@@ -128,6 +165,8 @@ class WSVADTrainer:
                     kwargs["class_labels"] = torch.cat(
                         [nb["class_id"], ab["class_id"]], dim=0
                     )
+                if self._accepts_lengths:
+                    kwargs["lengths"] = self._valid_lengths(feature)
                 out = model(
                     video=feature,
                     abnormal_labels=ab["anomaly"],
@@ -135,15 +174,96 @@ class WSVADTrainer:
                     **kwargs,
                 )
                 self.accelerator.backward(out.loss)
+                if self.grad_clip_norm is not None:
+                    self.accelerator.clip_grad_norm_(model.parameters(), self.grad_clip_norm)
                 optimizer.step()
                 optimizer.zero_grad()
                 total += out.loss.item()
+            if self.scheduler is not None:
+                self.scheduler.step()
 
             log = {"epoch": epoch, "train_loss": total / max(len(nl), 1)}
-            if test_dataset is not None:
+            if eval_fn is not None:
+                m = eval_fn(self.accelerator.unwrap_model(model))
+                best["last"] = m["roc_auc"]
+                sel = m.get(select_metric, m["roc_auc"])
+                if sel > best["_sel"]:
+                    best.update(roc_auc=m["roc_auc"], pr_auc=m["pr_auc"], best_epoch=epoch, _sel=sel)
+                log.update(roc_auc=round(m["roc_auc"], 4), pr_auc=round(m["pr_auc"], 4),
+                           best=round(best["roc_auc"], 4))
+            elif test_dataset is not None:
                 log.update(self.evaluate(test_dataset))
             self.accelerator.print(log)
-        return log
+        best.pop("_sel", None)
+        return best if eval_fn is not None else log
+
+    def fit_steps(
+        self,
+        train_datasets: Dict[str, Dataset],
+        max_steps: int,
+        eval_fn,
+        eval_interval: int,
+        eval_start: int = 0,
+        select_metric: str = "roc_auc",
+    ) -> Dict[str, float]:
+        """Iteration-based training (the WSVAD convention: RTFM/S3R/UR-DMU/... count
+        gradient *steps*, not epochs). Cycles the normal/abnormal loaders, takes
+        ``max_steps`` balanced mini-batches, calls ``eval_fn(model) -> {roc_auc,
+        pr_auc}`` every ``eval_interval`` steps (after ``eval_start``), and keeps the
+        BEST checkpoint by ``select_metric`` (AUC, or 'pr_auc' for BN-WVAD's AP).
+
+        ``eval_fn`` is injected so the trainer stays decoupled from any specific eval
+        (the matrix passes a per-head ``src.eval_matrix.evaluate`` closure).
+        """
+        import itertools
+
+        loaders = {
+            k: DataLoader(train_datasets[k], batch_size=self.batch_size, shuffle=True,
+                          drop_last=True, num_workers=self.num_workers,
+                          collate_fn=_collate_train)
+            for k in ("normal", "abnormal")
+        }
+        model, optimizer, nl, al = self.accelerator.prepare(
+            self.model, self.optimizer, loaders["normal"], loaders["abnormal"]
+        )
+
+        def _cycle(dl):
+            while True:
+                for x in dl:
+                    yield x
+
+        nit, ait = _cycle(nl), _cycle(al)
+        best = {"roc_auc": 0.0, "pr_auc": 0.0, "best_step": -1, "last": 0.0, "_sel": -1.0}
+        run_loss = 0.0
+        for step in range(1, max_steps + 1):
+            model.train()
+            nb, ab = next(nit), next(ait)
+            feature = torch.cat([nb["feature"], ab["feature"]], dim=0)
+            kwargs = {}
+            if self._accepts_class:
+                kwargs["class_labels"] = torch.cat([nb["class_id"], ab["class_id"]], dim=0)
+            if self._accepts_lengths:
+                kwargs["lengths"] = self._valid_lengths(feature)
+            out = model(video=feature, abnormal_labels=ab["anomaly"],
+                        normal_labels=nb["anomaly"], **kwargs)
+            self.accelerator.backward(out.loss)
+            if self.grad_clip_norm is not None:
+                self.accelerator.clip_grad_norm_(model.parameters(), self.grad_clip_norm)
+            optimizer.step()
+            optimizer.zero_grad()
+            run_loss += out.loss.item()
+            if step >= eval_start and (step % eval_interval == 0 or step == max_steps):
+                m = eval_fn(self.accelerator.unwrap_model(model))
+                best["last"] = m["roc_auc"]
+                sel = m.get(select_metric, m["roc_auc"])
+                if sel > best["_sel"]:
+                    best.update(roc_auc=m["roc_auc"], pr_auc=m["pr_auc"], best_step=step, _sel=sel)
+                self.accelerator.print(
+                    {"step": step, "train_loss": round(run_loss / eval_interval, 4),
+                     "roc_auc": round(m["roc_auc"], 4), "best": round(best["roc_auc"], 4)})
+                run_loss = 0.0
+        best.pop("_sel", None)
+        return best
 
     @torch.no_grad()
     def evaluate(self, test_dataset: Dataset) -> Dict[str, float]:

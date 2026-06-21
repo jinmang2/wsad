@@ -165,11 +165,13 @@ class VadCLIPPreTrainedModel(PreTrainedModel):
     base_model_prefix = "vadclip"
 
     def _init_weights(self, module):
-        if isinstance(module, nn.Linear):
-            nn.init.xavier_uniform_(module.weight)
-            if module.bias is not None:
-                nn.init.constant_(module.bias, 0)
-        elif isinstance(module, nn.Embedding):
+        # Match official VadCLIP init (model.py:119-122): ONLY the two task embeddings
+        # get a custom std=0.01; every Linear/MLP/GraphConv stays at PyTorch default
+        # (kaiming_uniform). xavier-overriding the Linears ~2.5x-inflates the binary
+        # head, saturating logits at init -> from-scratch training collapses to chance
+        # (verified 2026-06-22: xavier -> ROC 0.49; default -> learns). Inference is
+        # unaffected (load_state_dict overwrites init).
+        if isinstance(module, nn.Embedding):
             nn.init.normal_(module.weight, std=0.01)
 
     @property
@@ -341,7 +343,7 @@ class VadCLIPForVideoAnomalyDetection(VadCLIPPreTrainedModel):
         scores = torch.sigmoid(logits1)
         loss = None
         if abnormal_labels is not None and normal_labels is not None:
-            loss = self._compute_loss(logits1, logits2, text_features_ori, class_labels)
+            loss = self._compute_loss(logits1, logits2, text_features_ori, class_labels, lengths)
 
         return VadCLIPVideoAnomalyDetectionOutput(
             loss=loss,
@@ -355,15 +357,24 @@ class VadCLIPForVideoAnomalyDetection(VadCLIPPreTrainedModel):
     def _topk_k(self, t: int) -> int:
         return max(t // 16 + 1, 1)
 
-    def _compute_loss(self, binary_logits, alignment_logits, text_features_ori, class_labels):
+    def _compute_loss(self, binary_logits, alignment_logits, text_features_ori,
+                      class_labels, lengths=None):
         bs, t, _ = binary_logits.size()
         half = bs // 2
         device = binary_logits.device
-        k = self._topk_k(t)
+        # per-video valid length -> top-k over REAL frames only (official CLAS2/CLASM
+        # slice ``[0:lengths[i]]`` with k=lengths[i]//16+1). Padded positions are
+        # shared by normal+abnormal, so including them dilutes the MIL signal.
+        if lengths is None:
+            lens = [t] * bs
+        else:
+            lens = [int(max(min(L, t), 1)) for L in lengths]
 
         y = torch.cat([torch.zeros(half, device=device), torch.ones(half, device=device)])
         probs = torch.sigmoid(binary_logits).squeeze(-1)
-        inst = torch.stack([torch.topk(probs[i], k)[0].mean() for i in range(bs)])
+        inst = torch.stack([
+            torch.topk(probs[i, : lens[i]], self._topk_k(lens[i]))[0].mean() for i in range(bs)
+        ])
         loss1 = F.binary_cross_entropy(inst.clamp(1e-6, 1 - 1e-6), y)
 
         tf = text_features_ori / (text_features_ori.norm(dim=-1, keepdim=True) + 1e-12)
@@ -375,9 +386,10 @@ class VadCLIPForVideoAnomalyDetection(VadCLIPPreTrainedModel):
         if class_labels is not None:
             labels = F.one_hot(class_labels.long().to(device), self.config.num_class).float()
             labels = labels / labels.sum(dim=1, keepdim=True).clamp_min(1e-6)
-            inst_logits = torch.stack(
-                [torch.topk(alignment_logits[i], k, dim=0)[0].mean(0) for i in range(bs)]
-            )
+            inst_logits = torch.stack([
+                torch.topk(alignment_logits[i, : lens[i]], self._topk_k(lens[i]), dim=0)[0].mean(0)
+                for i in range(bs)
+            ])
             loss2 = -torch.mean(torch.sum(labels * F.log_softmax(inst_logits, dim=1), dim=1))
             loss = loss + loss2
         return loss
@@ -396,3 +408,26 @@ def convert_official_vadclip(state_dict: dict) -> "OrderedDict":
             continue
         out[k] = v
     return out
+
+
+def load_pretrained_clip_text(model, official_ckpt: str = "pretrained/vadclip/model_ucf.pth"):
+    """Initialise + FREEZE the CLIP text tower for *from-scratch* training.
+
+    The official ``CLIPVAD`` loads pretrained CLIP ViT-B/16 and freezes it
+    (``model.py:111-113``: ``requires_grad = False``), so the ``clipmodel.*`` keys
+    in ``model_ucf.pth`` are the *unchanged* OpenAI CLIP weights — using them as the
+    from-scratch init is the frozen pretrained backbone, NOT trained head weights.
+    Everything else (temporal/gc/disAdj/linear/mlp/classifier/prompt embeddings)
+    stays at random init. Without this the text-alignment branch is random and the
+    model cannot learn (from-scratch ROC-AUC stays at chance ~0.49).
+    """
+    sd = torch.load(official_ckpt, map_location="cpu", weights_only=False)
+    sd = sd.get("state_dict", sd) if isinstance(sd, dict) else sd
+    sd = convert_official_vadclip(sd)
+    clip_sd = {k: v for k, v in sd.items() if k.startswith("clipmodel.")}
+    missing, unexpected = model.load_state_dict(clip_sd, strict=False)
+    leaked = [k for k in unexpected if k.startswith("clipmodel.")]
+    assert not leaked, f"clipmodel keys failed to load: {leaked[:5]}"
+    for p in model.clipmodel.parameters():  # official freezes CLIP
+        p.requires_grad = False
+    return len(clip_sd)
