@@ -128,9 +128,16 @@ def _load_clip(
     return out
 
 
-def _load_i3d(root: str, mode: str, data_cfg=None) -> Dict[str, np.ndarray]:
+def _identity(x):  # open_func for lazy npy-dir loading (FeatureDataset does np.load)
+    return x
+
+
+def _load_i3d(root: str, mode: str, data_cfg=None) -> Dict[str, str]:
+    """Return ``{name: path}`` (LAZY). Eager-loading all npy into RAM OOM-kills WSL
+    for big variants (i3d_mgfn_seg200 train = 25 GB > 15 GB RAM -> session crash).
+    FeatureDataset(open_func=_identity) does ``np.load(path)`` per __getitem__."""
     d = _i3d_npy_dir(root, data_cfg, mode)
-    out = {f: np.load(os.path.join(d, f)) for f in _list_npy(d)}
+    out = {f: os.path.join(d, f) for f in _list_npy(d)}
     if not out:
         raise FileNotFoundError(f"no I3D .npy under {d} (see docs/DATA_LOCAL.md)")
     return out
@@ -240,23 +247,26 @@ def build_datasets_local(data_cfg):
             return _load_clip(root, mode, length, n_seg, sc, data_cfg)
         return _load_i3d(root, mode, data_cfg)
 
+    # i3d npy dirs are loaded LAZILY (values = paths, np.load per __getitem__) to avoid
+    # OOM-killing WSL on big variants (seg200 = 25 GB); clip values are eager arrays.
+    i3d_open = _identity if backbone == "i3d" else None
     train_vals = load("train")
     names = list(train_vals)
     normal = [n for n in names if "Normal" in n]
     abnormal = [n for n in names if "Normal" not in n]
     train = {
         "normal": FeatureDataset(
-            normal, {f: train_vals[f] for f in normal}, with_magnitude=with_mag
+            normal, {f: train_vals[f] for f in normal}, open_func=i3d_open, with_magnitude=with_mag
         ),
         "abnormal": FeatureDataset(
-            abnormal, {f: train_vals[f] for f in abnormal}, with_magnitude=with_mag
+            abnormal, {f: train_vals[f] for f in abnormal}, open_func=i3d_open, with_magnitude=with_mag
         ),
     }
 
     test_vals = load("test")
     gt = _align_gt(list(test_vals), _load_ground_truth(data_cfg))
     test = FeatureDataset(
-        list(test_vals), test_vals, labels=gt, with_magnitude=with_mag
+        list(test_vals), test_vals, labels=gt, open_func=i3d_open, with_magnitude=with_mag
     )
     return train, test
 
