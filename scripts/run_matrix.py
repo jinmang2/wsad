@@ -153,6 +153,7 @@ def run_pair(
     batch_override: Optional[int] = None,
     lr_override: Optional[float] = None,
     lr_decay: Optional[str] = None,
+    eval_every: Optional[int] = None,
 ) -> dict:
     spec = HEADS[head]
     t0 = time.time()
@@ -163,7 +164,7 @@ def run_pair(
     # per-paper recipe (HEADS[head]) with optional CLI overrides
     max_steps = steps_override or spec.get("steps", 3000)
     lr = lr_override or spec.get("lr") or cfg_lr
-    eval_interval = max(max_steps // 30, 50)
+    eval_interval = eval_every or max(max_steps // 30, 50)
 
     if official and (backbone, head) in OFFICIAL_CKPT:
         _load_official(model, OFFICIAL_CKPT[(backbone, head)], head)
@@ -263,6 +264,7 @@ def main():
     ap.add_argument("--wandb", default=None, help="wandb project name (enables per-cell logging)")
     ap.add_argument("--lr", type=float, default=None, help="override runner lr (e.g. 5e-5)")
     ap.add_argument("--lr-decay", default=None, choices=[None, "cosine"], help="per-step LR decay (stabilizes constant-lr divergence)")
+    ap.add_argument("--eval-every", type=int, default=None, help="override eval interval in steps (MGFN overfits early -> eval often to catch the peak)")
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -296,7 +298,7 @@ def main():
                              args.official or args.official_only, variant=args.variant,
                              wandb_proj=args.wandb, steps_override=steps_override,
                              batch_override=args.batch, lr_override=args.lr,
-                             lr_decay=args.lr_decay)
+                             lr_decay=args.lr_decay, eval_every=args.eval_every)
                 print("  ->", r)
             except Exception as e:
                 r = {"backbone": backbone, "head": head, "error": str(e)[:300]}
