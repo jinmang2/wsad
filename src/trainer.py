@@ -219,6 +219,7 @@ class WSVADTrainer:
         eval_interval: int,
         eval_start: int = 0,
         select_metric: str = "roc_auc",
+        lr_decay: Optional[str] = None,
     ) -> Dict[str, float]:
         """Iteration-based training (the WSVAD convention: RTFM/S3R/UR-DMU/... count
         gradient *steps*, not epochs). Cycles the normal/abnormal loaders, takes
@@ -228,9 +229,14 @@ class WSVADTrainer:
 
         ``eval_fn`` is injected so the trainer stays decoupled from any specific eval
         (the matrix passes a per-head ``src.eval_matrix.evaluate`` closure).
-        """
-        import itertools
 
+        ``lr_decay="cosine"`` adds a per-step CosineAnnealingLR over ``max_steps`` —
+        the official constant-lr RTFM recipe destabilizes (train loss climbs, AUC
+        oscillates around an early lucky peak); decaying the lr lets it CONVERGE so
+        the eval AUC settles high instead of bouncing. Returns ``auc_mean``/``auc_std``
+        over all eval points (the honest stability metric, alongside the optimistic
+        best-test-AUC the field reports).
+        """
         loaders = {
             k: DataLoader(train_datasets[k], batch_size=self.batch_size, shuffle=True,
                           drop_last=True, num_workers=self.num_workers,
@@ -240,6 +246,11 @@ class WSVADTrainer:
         model, optimizer, nl, al = self.accelerator.prepare(
             self.model, self.optimizer, loaders["normal"], loaders["abnormal"]
         )
+        scheduler = (
+            torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max_steps)
+            if lr_decay == "cosine"
+            else None
+        )
 
         def _cycle(dl):
             while True:
@@ -248,6 +259,7 @@ class WSVADTrainer:
 
         nit, ait = _cycle(nl), _cycle(al)
         best = {"roc_auc": 0.0, "pr_auc": 0.0, "best_step": -1, "last": 0.0, "_sel": -1.0}
+        eval_aucs = []
         run_loss = 0.0
         for step in range(1, max_steps + 1):
             model.train()
@@ -265,18 +277,28 @@ class WSVADTrainer:
                 self.accelerator.clip_grad_norm_(model.parameters(), self.grad_clip_norm)
             optimizer.step()
             optimizer.zero_grad()
+            if scheduler is not None:
+                scheduler.step()
             run_loss += out.loss.item()
             if step >= eval_start and (step % eval_interval == 0 or step == max_steps):
                 m = eval_fn(self.accelerator.unwrap_model(model))
                 best["last"] = m["roc_auc"]
+                eval_aucs.append(m["roc_auc"])
                 sel = m.get(select_metric, m["roc_auc"])
                 if sel > best["_sel"]:
                     best.update(roc_auc=m["roc_auc"], pr_auc=m["pr_auc"], best_step=step, _sel=sel)
                 self.accelerator.print(
-                    {"step": step, "train_loss": round(run_loss / eval_interval, 4),
+                    {"step": step, "lr": round(optimizer.param_groups[0]["lr"], 6),
+                     "train_loss": round(run_loss / eval_interval, 4),
                      "roc_auc": round(m["roc_auc"], 4), "best": round(best["roc_auc"], 4)})
                 run_loss = 0.0
         best.pop("_sel", None)
+        # honest stability metric: mean/std over the LATE half of eval points
+        late = eval_aucs[len(eval_aucs) // 2:] or eval_aucs
+        if late:
+            import statistics
+            best["auc_mean"] = round(statistics.mean(late), 4)
+            best["auc_std"] = round(statistics.pstdev(late), 4) if len(late) > 1 else 0.0
         return best
 
     @torch.no_grad()
