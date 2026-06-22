@@ -37,9 +37,16 @@ mixing extractions silently breaks them. Verified per-snippet L2 norms:
 
 | Source | I3D L2/snip | Notes |
 |--------|-------------|-------|
-| **MGFN `features/i3d/*.zip`** (canonical) | **~2.5** | the working pair, 1610/290, what every runner expects |
-| RTFM `_archive/...` | ~22 | different extraction, 109/290 test — quarantined, ignore |
-| our tushar-n extractor (`scripts/validate_extraction.py`) | ~22 | self-consistent w/ RTFM, **NOT** with MGFN |
+| **`features/i3d/*.zip`** (canonical, DeepMIL/Roc-Ng) | **~2.5** | the working pair, 1610/290, what every runner expects (its PROVENANCE says DeepMIL; the "MGFN" label here was loose) |
+| **`features/i3d_mgfn/{train,test}/`** (MGFN authors' OneDrive) | **~22** | full-length `(T,10,2048)`, **COMPLETE 1610/290** verified 2026-06-22, raw pre-seg32. RTFM-family scale. See its PROVENANCE.md |
+| RTFM `_archive/...` | ~22 | different extraction, 109/290 test — quarantined, ignore (i3d_mgfn supersedes it) |
+| our tushar-n extractor (`scripts/validate_extraction.py`) | ~22 | self-consistent w/ RTFM, **NOT** with the ~2.5 i3d/ |
+
+> Two distinct lineages share the "MGFN" name loosely. The L2~2.5 pair in
+> `features/i3d/` is DeepMIL (what the default runners use). The genuine
+> MGFN-author distribution (HKU OneDrive) is L2~22 and lives in
+> `features/i3d_mgfn/` — select with `data.feature_variant: i3d_mgfn`. Never mix
+> the two scales across train/test.
 
 → A fresh extraction must re-do **both** train+test with one model; you cannot
 reuse MGFN's test against tushar-n train. CLIP similarly: the provided
@@ -50,7 +57,8 @@ reuse MGFN's test against tushar-n train. CLIP similarly: the provided
 
 | Source | What | Put under |
 |--------|------|-----------|
-| MGFN UCF features | I3D seg32 `train.zip` + full-length `test.zip` | `ucf_crime/features/i3d/` |
+| DeepMIL UCF features (canonical) | I3D seg32 `train.zip` + full-length `test.zip` | `ucf_crime/features/i3d/` |
+| MGFN authors' OneDrive 10-crop I3D | full-length `(T,10,2048)` per-video `.npy`, 1610/290 | `ucf_crime/features/i3d_mgfn/{train,test}/` (fetch via `scripts/onedrive_fetch/`) |
 | VadCLIP `UCFClipFeatures` | CLIP per-crop `.npy` (`<Vid>_x264__0..9.npy`, `(T,512)`) | `ucf_crime/features/clip/_byclass/` then run prepare |
 
 The VadCLIP dump is **not folder-split** — it ships `list/ucf_CLIP_rgbtest.csv`.

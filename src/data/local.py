@@ -91,6 +91,11 @@ def _i3d_variant(data_cfg) -> str:
     Lets the comparison matrix select a specific I3D extraction —
     ``i3d_tushar`` (HF tushar-n), ``i3d_pyvideo`` (HF main/pytorchvideo),
     ``i3d_ours`` (our Gowtham re-extract) — each a self-consistent train+test set.
+
+    ``i3d_mgfn`` = MGFN authors' 10-crop I3D (HKU OneDrive), full-length
+    ``(T, 10, 2048)``, RTFM-family scale L2~22 — COMPLETE 1610/290 but raw
+    pre-seg32 (needs T->32 to feed seg32 models). Do NOT mix with ``i3d``
+    (DeepMIL scale ~2.5). See features/i3d_mgfn/PROVENANCE.md.
     """
     return getattr(data_cfg, "feature_variant", None) or "i3d"
 
