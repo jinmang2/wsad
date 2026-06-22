@@ -154,6 +154,7 @@ def run_pair(
     lr_override: Optional[float] = None,
     lr_decay: Optional[str] = None,
     eval_every: Optional[int] = None,
+    eval_start_override: Optional[int] = None,
 ) -> dict:
     spec = HEADS[head]
     t0 = time.time()
@@ -183,7 +184,7 @@ def run_pair(
     wd_v = spec.get("wd", wd)
     grad_clip = spec.get("grad_clip")
     ckpt_metric = spec.get("ckpt", "roc_auc")  # BN-WVAD selects on AP (pr_auc)
-    eval_start = spec.get("eval_start", 0)
+    eval_start = eval_start_override if eval_start_override is not None else spec.get("eval_start", 0)
 
     run = None
     if wandb_proj:
@@ -265,6 +266,7 @@ def main():
     ap.add_argument("--lr", type=float, default=None, help="override runner lr (e.g. 5e-5)")
     ap.add_argument("--lr-decay", default=None, choices=[None, "cosine"], help="per-step LR decay (stabilizes constant-lr divergence)")
     ap.add_argument("--eval-every", type=int, default=None, help="override eval interval in steps (MGFN overfits early -> eval often to catch the peak)")
+    ap.add_argument("--eval-start", type=int, default=None, help="override step to start evaluating (default = per-head recipe)")
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -298,7 +300,8 @@ def main():
                              args.official or args.official_only, variant=args.variant,
                              wandb_proj=args.wandb, steps_override=steps_override,
                              batch_override=args.batch, lr_override=args.lr,
-                             lr_decay=args.lr_decay, eval_every=args.eval_every)
+                             lr_decay=args.lr_decay, eval_every=args.eval_every,
+                             eval_start_override=args.eval_start)
                 print("  ->", r)
             except Exception as e:
                 r = {"backbone": backbone, "head": head, "error": str(e)[:300]}
