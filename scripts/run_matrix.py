@@ -104,12 +104,12 @@ def _data_cfg(backbone: str, spec: dict, variant: str = "i3d"):
     )
 
 
-def _build_model(head: str, backbone: str, device: str):
+def _build_model(head: str, backbone: str, device: str, dim: Optional[int] = None):
     spec = HEADS[head]
     with initialize(version_base=None, config_path="../configs"):
         cfg = compose(config_name="default", overrides=[f"runner={spec['runner']}"])
     model_cfg = instantiate(cfg.runner.model_config)
-    _set_dim(model_cfg, BACKBONE_DIM[backbone])
+    _set_dim(model_cfg, dim or BACKBONE_DIM[backbone])  # dim override for 1024-d DeepMIL (UR-DMU/BN-WVAD)
     model = _locate(cfg.runner.model_class)(model_cfg)
     lr = float(cfg.runner.optimizer.learning_rate)
     wd = float(cfg.runner.optimizer.weight_decay)
@@ -155,13 +155,14 @@ def run_pair(
     lr_decay: Optional[str] = None,
     eval_every: Optional[int] = None,
     eval_start_override: Optional[int] = None,
+    dim_override: Optional[int] = None,
 ) -> dict:
     spec = HEADS[head]
     t0 = time.time()
     feat_tag = variant if backbone == "i3d" else backbone
     data_cfg = _data_cfg(backbone, spec, variant)
     train_sets, test_set = build_datasets(data_cfg)
-    model, cfg_lr, wd = _build_model(head, backbone, device)
+    model, cfg_lr, wd = _build_model(head, backbone, device, dim=dim_override)
     # per-paper recipe (HEADS[head]) with optional CLI overrides
     max_steps = steps_override or spec.get("steps", 3000)
     lr = lr_override or spec.get("lr") or cfg_lr
@@ -171,7 +172,7 @@ def run_pair(
         _load_official(model, OFFICIAL_CKPT[(backbone, head)], head)
         metrics = evaluate(model, test_set, backbone=backbone, head=head, device=device)
         return {
-            "backbone": backbone, "head": head, "feature": feat_tag, "dim": BACKBONE_DIM[backbone],
+            "backbone": backbone, "head": head, "feature": feat_tag, "dim": dim_override or BACKBONE_DIM[backbone],
             "steps": 0, "source": "official-ckpt",
             "roc_auc": round(metrics["roc_auc"], 4), "pr_auc": round(metrics["pr_auc"], 4),
             "best_step": -1, "n_test": len(test_set), "seconds": round(time.time() - t0, 1),
@@ -217,7 +218,7 @@ def run_pair(
                             "best_step": best["best_step"], "last_auc": best["last"]})
         run.finish()
     return {
-        "backbone": backbone, "head": head, "feature": feat_tag, "dim": BACKBONE_DIM[backbone],
+        "backbone": backbone, "head": head, "feature": feat_tag, "dim": dim_override or BACKBONE_DIM[backbone],
         "steps": max_steps, "batch": 2 * bs, "lr": lr, "wd": wd_v, "source": "trained",
         "roc_auc": round(best["roc_auc"], 4), "pr_auc": round(best["pr_auc"], 4),
         "best_step": best["best_step"], "last_auc": round(best["last"], 4),
@@ -267,6 +268,7 @@ def main():
     ap.add_argument("--lr-decay", default=None, choices=[None, "cosine"], help="per-step LR decay (stabilizes constant-lr divergence)")
     ap.add_argument("--eval-every", type=int, default=None, help="override eval interval in steps (MGFN overfits early -> eval often to catch the peak)")
     ap.add_argument("--eval-start", type=int, default=None, help="override step to start evaluating (default = per-head recipe)")
+    ap.add_argument("--feature-dim", type=int, default=None, help="override feature dim (1024 for DeepMIL UR-DMU/BN-WVAD vs default 2048)")
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -301,7 +303,7 @@ def main():
                              wandb_proj=args.wandb, steps_override=steps_override,
                              batch_override=args.batch, lr_override=args.lr,
                              lr_decay=args.lr_decay, eval_every=args.eval_every,
-                             eval_start_override=args.eval_start)
+                             eval_start_override=args.eval_start, dim_override=args.feature_dim)
                 print("  ->", r)
             except Exception as e:
                 r = {"backbone": backbone, "head": head, "error": str(e)[:300]}
