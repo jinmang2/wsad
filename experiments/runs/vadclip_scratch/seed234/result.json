@@ -1,0 +1,26 @@
+{
+  "head": "vadclip",
+  "backbone": "clip",
+  "source": "from-scratch",
+  "recipe": {
+    "optimizer": "adamw",
+    "lr": 2e-05,
+    "weight_decay": 0.01,
+    "milestones": [
+      4,
+      8
+    ],
+    "gamma": 0.1,
+    "epochs": 10,
+    "batch_total": 128,
+    "seed": 234
+  },
+  "best_roc_auc": 0.8654,
+  "best_pr_auc": 0.3197,
+  "best_epoch": 2,
+  "last_roc_auc": 0.8604,
+  "paper_roc_auc": 0.8801,
+  "official_ckpt_roc_auc": 0.877,
+  "n_test": 290,
+  "seconds": 2501.1
+}

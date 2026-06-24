@@ -1,0 +1,20 @@
+{
+  "head": "rtfm",
+  "variant": "i3d_mgfn_seg32",
+  "source": "from-scratch",
+  "recipe": {
+    "optimizer": "adam",
+    "lr": 5e-05,
+    "wd": 0.0005,
+    "batch_total": 32,
+    "epochs": 15,
+    "seed": 0
+  },
+  "best_roc_auc": 0.8101,
+  "best_pr_auc": 0.2216,
+  "best_epoch": 5,
+  "last_roc_auc": 0.8047,
+  "paper_roc_auc": 0.843,
+  "n_test": 290,
+  "seconds": 699.7
+}
