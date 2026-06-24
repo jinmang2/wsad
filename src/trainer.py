@@ -81,13 +81,28 @@ class WSVADTrainer:
         batch_size: int = 32,
         num_workers: int = 2,
         frames_per_clip: int = 16,
-        mixed_precision: str = "no",  # "no" | "fp16" | "bf16"
+        mixed_precision: str = "no",  # "no" | "fp16" | "bf16" (AMP halves activation mem)
         grad_clip_norm: Optional[float] = None,  # e.g. 1.0 for BN-WVAD (official train.py:16)
         optimizer_name: str = "adam",  # "adam" | "adamw" (VadCLIP uses AdamW)
         scheduler_milestones: Optional[list] = None,  # MultiStepLR epochs, e.g. [4, 8] (VadCLIP)
         scheduler_gamma: float = 0.1,
+        gradient_checkpointing: bool = False,  # recompute activations in backward -> fit
+        # the full batch-64 forward on 8 GB (BN-WVAD/UR-DMU need the real batch for BN).
+        gradient_accumulation_steps: int = 1,  # NB: does NOT enlarge BN's batch (per-micro
+        # batch stats) — use real batch + checkpointing for BatchNorm-based heads.
     ):
-        self.accelerator = Accelerator(mixed_precision=mixed_precision)
+        self.accelerator = Accelerator(
+            mixed_precision=mixed_precision,
+            gradient_accumulation_steps=gradient_accumulation_steps,
+        )
+        self.grad_accum = gradient_accumulation_steps
+        if gradient_checkpointing:
+            n = 0
+            for m in model.modules():
+                if m is not model and hasattr(m, "gradient_checkpointing_enable"):
+                    m.gradient_checkpointing_enable()
+                    n += 1
+            print(f"[trainer] gradient checkpointing enabled on {n} submodule(s)", flush=True)
         self.model = model
         opt_cls = {"adam": torch.optim.Adam, "adamw": torch.optim.AdamW}[optimizer_name.lower()]
         self.optimizer = opt_cls(
@@ -270,15 +285,16 @@ class WSVADTrainer:
                 kwargs["class_labels"] = torch.cat([nb["class_id"], ab["class_id"]], dim=0)
             if self._accepts_lengths:
                 kwargs["lengths"] = self._valid_lengths(feature)
-            out = model(video=feature, abnormal_labels=ab["anomaly"],
-                        normal_labels=nb["anomaly"], **kwargs)
-            self.accelerator.backward(out.loss)
-            if self.grad_clip_norm is not None:
-                self.accelerator.clip_grad_norm_(model.parameters(), self.grad_clip_norm)
-            optimizer.step()
-            optimizer.zero_grad()
-            if scheduler is not None:
-                scheduler.step()
+            with self.accelerator.accumulate(model):
+                out = model(video=feature, abnormal_labels=ab["anomaly"],
+                            normal_labels=nb["anomaly"], **kwargs)
+                self.accelerator.backward(out.loss)
+                if self.accelerator.sync_gradients and self.grad_clip_norm is not None:
+                    self.accelerator.clip_grad_norm_(model.parameters(), self.grad_clip_norm)
+                optimizer.step()
+                optimizer.zero_grad()
+                if scheduler is not None and self.accelerator.sync_gradients:
+                    scheduler.step()
             run_loss += out.loss.item()
             if step >= eval_start and (step % eval_interval == 0 or step == max_steps):
                 m = eval_fn(self.accelerator.unwrap_model(model))

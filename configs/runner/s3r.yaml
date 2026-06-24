@@ -21,4 +21,4 @@ model_config:
 
 optimizer:
     learning_rate: 1e-3
-    weight_decay: 0.0005
+    weight_decay: 0.005

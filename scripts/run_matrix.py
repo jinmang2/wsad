@@ -156,6 +156,9 @@ def run_pair(
     eval_every: Optional[int] = None,
     eval_start_override: Optional[int] = None,
     dim_override: Optional[int] = None,
+    mixed_precision: str = "no",
+    grad_checkpoint: bool = False,
+    grad_accum: int = 1,
 ) -> dict:
     spec = HEADS[head]
     t0 = time.time()
@@ -181,7 +184,10 @@ def run_pair(
     # thin orchestration: per-paper recipe (HEADS) -> the canonical WSVADTrainer.fit_steps.
     from src.trainer import WSVADTrainer
 
-    bs = HEAD_BATCH.get((backbone, head)) or batch_override or spec.get("batch", 16)
+    # explicit --batch wins; HEAD_BATCH is only a fallback memory cap for 2048-d OOM
+    # (it must NOT silently throttle 1024-d memory heads to 4 — that breaks BN-WVAD's
+    # BatchNorm stats; official batch=64).
+    bs = batch_override or HEAD_BATCH.get((backbone, head)) or spec.get("batch", 16)
     wd_v = spec.get("wd", wd)
     grad_clip = spec.get("grad_clip")
     ckpt_metric = spec.get("ckpt", "roc_auc")  # BN-WVAD selects on AP (pr_auc)
@@ -209,7 +215,9 @@ def run_pair(
 
     trainer = WSVADTrainer(model=model, learning_rate=lr, weight_decay=wd_v, batch_size=bs,
                            num_workers=int(data_cfg.num_workers), frames_per_clip=16,
-                           mixed_precision="no", grad_clip_norm=grad_clip)
+                           mixed_precision=mixed_precision, grad_clip_norm=grad_clip,
+                           gradient_checkpointing=grad_checkpoint,
+                           gradient_accumulation_steps=grad_accum)
     best = trainer.fit_steps(train_sets, max_steps=max_steps, eval_fn=eval_fn,
                              eval_interval=eval_interval, eval_start=eval_start,
                              select_metric=ckpt_metric, lr_decay=lr_decay)
@@ -269,6 +277,9 @@ def main():
     ap.add_argument("--eval-every", type=int, default=None, help="override eval interval in steps (MGFN overfits early -> eval often to catch the peak)")
     ap.add_argument("--eval-start", type=int, default=None, help="override step to start evaluating (default = per-head recipe)")
     ap.add_argument("--feature-dim", type=int, default=None, help="override feature dim (1024 for DeepMIL UR-DMU/BN-WVAD vs default 2048)")
+    ap.add_argument("--mixed-precision", default="no", choices=["no", "fp16", "bf16"], help="AMP — halves activation memory (helps fit batch 64 on 8GB)")
+    ap.add_argument("--grad-checkpoint", action="store_true", help="activation checkpointing — recompute in backward so the full batch-64 forward fits 8GB (BN heads need the real batch)")
+    ap.add_argument("--grad-accum", type=int, default=1, help="gradient accumulation steps (NB: does not enlarge BatchNorm's effective batch)")
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -303,7 +314,9 @@ def main():
                              wandb_proj=args.wandb, steps_override=steps_override,
                              batch_override=args.batch, lr_override=args.lr,
                              lr_decay=args.lr_decay, eval_every=args.eval_every,
-                             eval_start_override=args.eval_start, dim_override=args.feature_dim)
+                             eval_start_override=args.eval_start, dim_override=args.feature_dim,
+                             mixed_precision=args.mixed_precision, grad_checkpoint=args.grad_checkpoint,
+                             grad_accum=args.grad_accum)
                 print("  ->", r)
             except Exception as e:
                 r = {"backbone": backbone, "head": head, "error": str(e)[:300]}

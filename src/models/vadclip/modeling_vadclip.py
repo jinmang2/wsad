@@ -35,6 +35,7 @@ from typing import List, Optional
 import numpy as np
 import torch
 import torch.nn.functional as F
+from src.modules.amp import safe_bce
 from torch import nn
 from transformers import PreTrainedModel
 from transformers.utils import ModelOutput
@@ -375,7 +376,7 @@ class VadCLIPForVideoAnomalyDetection(VadCLIPPreTrainedModel):
         inst = torch.stack([
             torch.topk(probs[i, : lens[i]], self._topk_k(lens[i]))[0].mean() for i in range(bs)
         ])
-        loss1 = F.binary_cross_entropy(inst.clamp(1e-6, 1 - 1e-6), y)
+        loss1 = safe_bce(inst.clamp(1e-6, 1 - 1e-6), y)
 
         tf = text_features_ori / (text_features_ori.norm(dim=-1, keepdim=True) + 1e-12)
         normal = tf[0]
