@@ -56,6 +56,48 @@ class FeatureExtractor(ABC):
         """
         raise NotImplementedError
 
+    def iter_snippets(self, video_path: str, on_clips) -> np.ndarray:
+        """RAM-bounded streaming extraction over a video file.
+
+        Reads only ``batch_size * snippet_len`` frames at a time from decord
+        (random-access ``get_batch``) instead of materializing every PIL frame —
+        a long surveillance clip can be 100k+ frames (decode-all = tens of GB RAM,
+        which has OOM-killed WSL before). ``on_clips(list_of_clips) -> (b, dim)``
+        runs the backbone on one batch of clips (each clip = ``snippet_len`` PIL
+        frames); results are concatenated to ``(T, dim)``.
+
+        Subclasses with the same snippet grid (videomae/xclip/internvideo) call this
+        with their per-batch encode hook; ``self.frequency``/``snippet_len``/
+        ``batch_size`` must be set on the instance.
+        """
+        import decord  # lazy
+
+        vr = decord.VideoReader(uri=video_path)
+        n = len(vr)
+        clip, freq, bs = self.snippet_len, self.frequency, self.batch_size
+        sample_to = getattr(self, "sample_to", None)
+        if sample_to:  # extract only `sample_to` uniformly-spaced snippets (fast seg path:
+            # one snippet per segment instead of all-then-pool, ~10x fewer forwards on long
+            # surveillance clips). Output is already (sample_to, dim) — no segment pooling.
+            import numpy as _np
+            starts = sorted(set(_np.linspace(0, max(n - clip, 0), sample_to).astype(int).tolist()))
+        else:
+            starts = list(range(0, max(n - clip + 1, 1), freq))
+        feats = []
+        for i in range(0, len(starts), bs):
+            bstarts = starts[i : i + bs]
+            lo, hi = bstarts[0], min(bstarts[-1] + clip, n)
+            win = vr.get_batch(list(range(lo, hi))).asnumpy()  # ONE contiguous read/batch
+            clips = []
+            for s in bstarts:
+                a = win[s - lo : s - lo + clip]
+                frames = [Image.fromarray(f) for f in a]
+                if len(frames) < clip:  # pad the tail snippet
+                    frames += [frames[-1]] * (clip - len(frames))
+                clips.append(frames)
+            feats.append(np.asarray(on_clips(clips)))
+        return np.concatenate(feats, axis=0)
+
     def info(self) -> dict:
         return {
             "name": self.name,

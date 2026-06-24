@@ -42,15 +42,19 @@ class VideoMAEFeatureExtractor(FeatureExtractor):
         self,
         model_name: str = "MCG-NJU/videomae-base",
         device: str = "cuda",
-        batch_size: int = 8,
+        batch_size: int = 16,
         fp16: bool = True,
         frequency: int = 16,
         segment_to: Optional[int] = None,
+        sample_to: Optional[int] = None,
     ):
         """Args:
         frequency: stride between snippet starts (16 = non-overlapping, I3D-style).
         segment_to: if set, uniform mean-pool the per-snippet features to this many
             segments (32-seg convention); if ``None``, keep per-snippet (T, dim).
+        sample_to: FAST seg path — extract only this many uniformly-spaced snippets
+            (one per segment) instead of all-then-pool; ~10x fewer forwards on long
+            clips. Output is already ``(sample_to, dim)``; overrides ``segment_to``.
         """
         from transformers import VideoMAEImageProcessor, VideoMAEModel  # lazy (heavy)
 
@@ -59,6 +63,7 @@ class VideoMAEFeatureExtractor(FeatureExtractor):
         self.fp16 = fp16 and device != "cpu"
         self.frequency = frequency
         self.segment_to = segment_to
+        self.sample_to = sample_to
 
         self.processor = VideoMAEImageProcessor.from_pretrained(model_name)
         self.model = VideoMAEModel.from_pretrained(model_name).eval().to(device)
@@ -84,27 +89,28 @@ class VideoMAEFeatureExtractor(FeatureExtractor):
         return out
 
     @torch.no_grad()
+    def _encode(self, clips: List[List[Image.Image]]) -> np.ndarray:
+        """One batch of clips (each = 16 PIL frames) -> ``(b, dim)`` (token mean-pool)."""
+        px = self.processor(clips, return_tensors="pt")["pixel_values"].to(self.device)
+        if self.fp16:
+            px = px.half()
+        hidden = self.model(pixel_values=px).last_hidden_state  # (b, tokens, dim)
+        return hidden.float().mean(dim=1).cpu().numpy()
+
+    @torch.no_grad()
     def extract(self, video: Union[str, List[Image.Image]]) -> np.ndarray:
-        frames = self._read_frames(video)
-        n, clip = len(frames), self.snippet_len
-        if n < clip:
-            frames = frames + [frames[-1]] * (clip - n)
-            n = clip
-        # non-overlapping 16-frame snippets (I3D frequency=16 convention)
-        starts = list(range(0, n - clip + 1, self.frequency))
-        clips = [frames[s : s + clip] for s in starts]
+        if isinstance(video, str):  # RAM-bounded streaming from the file
+            feats = self.iter_snippets(video, self._encode)
+        else:  # in-memory frame list (tests / pre-decoded)
+            frames, clip = list(video), self.snippet_len
+            if len(frames) < clip:
+                frames += [frames[-1]] * (clip - len(frames))
+            starts = list(range(0, len(frames) - clip + 1, self.frequency))
+            clips = [frames[s : s + clip] for s in starts]
+            feats = np.concatenate(
+                [self._encode(clips[i : i + self.batch_size])
+                 for i in range(0, len(clips), self.batch_size)], axis=0)
 
-        feats = []
-        for i in range(0, len(clips), self.batch_size):
-            batch = clips[i : i + self.batch_size]
-            # processor takes a list of videos (each = list of 16 frames)
-            px = self.processor(batch, return_tensors="pt")["pixel_values"].to(self.device)
-            if self.fp16:
-                px = px.half()
-            hidden = self.model(pixel_values=px).last_hidden_state  # (b, tokens, dim)
-            feats.append(hidden.float().mean(dim=1).cpu().numpy())
-        feats = np.concatenate(feats, axis=0)  # (T, dim)
-
-        if self.segment_to is not None:
+        if self.segment_to is not None and not self.sample_to:
             feats = self._segment(feats, self.segment_to)
         return feats

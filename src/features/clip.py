@@ -11,6 +11,14 @@ Differences vs I3D:
   - **dim = 512**; **preprocess** = the CLIP image transform (224, CLIP mean/std).
   - **text_aligned = True**.
 
+**Pretrained = OpenAI ViT-B/16** (not laion). The local cached CLIP features
+(``features/clip``) are the official VadCLIP ``UCFClipFeatures`` dump, extracted
+with OpenAI CLIP ViT-B/16 — and every text-branch head is trained on them. Two
+independently-trained CLIP models have *unaligned* 512-d bases (verified:
+laion-vs-cache seg-pooled cosine ≈ 0; openai-vs-cache ≈ 0.92), so serving a raw
+video through a head trained on the cache **requires** the OpenAI weights here.
+Override ``pretrained="laion2b_s34b_b88k"`` only if re-extracting all caches.
+
 Heavy deps (``open_clip``, ``decord``) are imported lazily so this module always
 imports; only ``extract()`` / ``__init__`` need them. Execution needs a GPU.
 """
@@ -37,7 +45,7 @@ class CLIPFeatureExtractor(FeatureExtractor):
     def __init__(
         self,
         model_name: str = "ViT-B-16",
-        pretrained: str = "laion2b_s34b_b88k",
+        pretrained: str = "openai",
         device: str = "cuda",
         batch_size: int = 256,
         fp16: bool = True,
