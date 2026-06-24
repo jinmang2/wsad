@@ -66,10 +66,51 @@ class VideoMAEFeatureExtractor(FeatureExtractor):
         self.sample_to = sample_to
 
         self.processor = VideoMAEImageProcessor.from_pretrained(model_name)
-        self.model = VideoMAEModel.from_pretrained(model_name).eval().to(device)
+        self.model = VideoMAEModel.from_pretrained(model_name).eval()
+        self._patch_qkv_bias(model_name)  # before .half()/.to() — see method
+        self.model = self.model.to(device)
         if self.fp16:
             self.model.half()
         self.dim = int(self.model.config.hidden_size)
+
+    def _patch_qkv_bias(self, model_name: str) -> None:
+        """Restore the checkpoint's timm-style attention bias dropped by the HF loader.
+
+        MCG-NJU VideoMAE checkpoints store attention bias as ``q_bias`` / ``v_bias``
+        (with ``k_bias`` ≡ 0, the original qkv-fused convention). transformers' newer
+        VideoMAE port uses split ``query/key/value.bias`` Linear layers but does NOT
+        convert the old keys, so ``query.bias`` / ``value.bias`` load as ZERO — silently
+        discarding a large learned bias (||q_bias|| ≈ 17). That corrupts every attention
+        score and thus the features. Map ``q_bias -> query.bias``, ``v_bias -> value.bias``
+        (key.bias stays 0). No-op on transformers versions that already load correctly.
+        """
+        import torch
+
+        enc = self.model.encoder.layer
+        a0 = enc[0].attention.attention
+        if a0.query.bias is None or a0.query.bias.abs().sum() > 0:
+            return  # older transformers already mapped the bias (or arch has none)
+
+        from huggingface_hub import hf_hub_download
+
+        try:
+            sd = torch.load(hf_hub_download(model_name, "pytorch_model.bin"),
+                            map_location="cpu")
+        except Exception:
+            from safetensors.torch import load_file
+            sd = load_file(hf_hub_download(model_name, "model.safetensors"))
+
+        patched = 0
+        with torch.no_grad():
+            for i, layer in enumerate(enc):
+                att = layer.attention.attention
+                for src, dst in (("q_bias", att.query), ("v_bias", att.value)):
+                    key = f"videomae.encoder.layer.{i}.attention.attention.{src}"
+                    if key in sd and dst.bias is not None:
+                        dst.bias.copy_(sd[key].to(dst.bias.dtype))
+                        patched += 1
+        if patched:
+            print(f"[videomae] restored {patched} timm q/v-bias tensors the HF loader dropped")
 
     def _read_frames(self, video: Union[str, List[Image.Image]]) -> List[Image.Image]:
         if isinstance(video, str):
