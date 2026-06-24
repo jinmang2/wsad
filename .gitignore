@@ -178,3 +178,7 @@ checkpoints/*
 
 # pretrained weights (large binaries: mgfn/vadclip ckpts, i3d caffe2 pkls)
 pretrained/
+
+# run logs (keep result.json / epoch_log.json; drop verbose logs)
+experiments/runs/**/*.log
+experiments/runs/*.log
