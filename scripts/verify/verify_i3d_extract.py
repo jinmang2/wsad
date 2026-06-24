@@ -21,7 +21,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
 GOWTHAM = os.path.join(ROOT, ".reference", "I3D_Feature_Extraction_resnet")
 sys.path.insert(0, GOWTHAM)
