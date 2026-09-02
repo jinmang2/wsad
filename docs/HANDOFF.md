@@ -1,78 +1,91 @@
 # Session handoff — WSVAD comparison framework
 
-Pick-up notes for continuing on another machine. **Single source of truth = PR #22**;
-roadmap = Epic #16. No per-spec PRs, no new issues (track in PR #22). Delete this
-file once the work lands.
+Pick-up notes for continuing on another machine. Single source of truth = PR #22
+(draft, base `dev`), roadmap = Epic #16; track work there rather than opening issues.
 
-- **Branch:** `feat/eval-matrix-serving` (based on `feat/data-pipeline`, PR base `dev`)
-- **PR:** #22 (draft) · **Epic:** #16 · sub-issues #17–21 were **closed/consolidated** into PR #22
-- **Last commit:** `857af70` (6 commits ahead of the data-pipeline base)
+- **Branch:** `feat/eval-matrix-serving`
+- **State as of 2026-09-02:** Spec 1 complete with real numbers; Spec 2 steps 1–4
+  implemented and measured; Track A (better features) is gated on GPU hours, not code.
 
-## Environment (reproduce on the new PC)
+## Environment
 - **uv only — conda is gone.** `uv sync --group dev` recreates everything from
   `pyproject.toml` + `uv.lock` (Python 3.11, torch 2.11.0+cu130 from the PyTorch index).
-- Interpreter: **`uv run python`**. No `PYTHONPATH=.` — the project installs editable,
-  so `src.*`, `scripts.*` and `experiments.*` import directly.
-- `decord`, `open_clip_torch`, `timm`, `transformers` are all pinned in the lock file.
-  Still needed for runtime work: GPU + weights for InternVideo2 / VideoMAEv2.
-- Tests: `uv run pytest -q` → **74 passed** (verified on the uv env, 2026-09-02).
+- Interpreter: **`uv run python`**. No `PYTHONPATH=.` — the project installs editable, so
+  `src.*`, `scripts.*` and `experiments.*` import directly.
+- Tests: `uv run pytest -q` → **106 passed**.
+- Hardware reality that shapes every plan: one **RTX 2070 SUPER (8 GB)** on WSL, which
+  reboots intermittently. Serialize GPU work; check `nvidia-smi` (utilisation and power,
+  not just free VRAM) before starting anything. The network is sometimes a mobile hotspot,
+  so a large download is its own budget even when the GPU is idle. **Long training runs and
+  multi-GB downloads need the user's go-ahead each time.**
 
-## What is DONE (Spec 1 scaffold — code only, runtime-UNVERIFIED)
-- `src/compat.py` — backbone↔head text-align guard (`assert_compatible`); flags
-  `requires_text_aligned=True` on VadCLIP + TPWNG only.
-- `src/models/mgfn/modeling_mgfn.py` — removed hardcoded `2048`; split now from
-  `config.channels` (dim-agnostic). 2048 path verified byte-identical.
-- `src/pipeline.py` — `AnomalyDetectionPipeline(backbone, head)`: extractor(processor)
-  + head + postprocess; `from_features()` (extraction-free) + `visualize()`; auto-sets
-  head feature-dim to backbone dim. **`mode="offline"` only.**
-- `src/viz.py` — `plot_anomaly_scores()`: blue curve + light-orange GT band + dashed
-  red boundaries (matches paper Fig.10); `legend` toggle.
-- `src/features/extract.py` + `scripts/extract_features.py --backbone` — registry
-  dispatcher caching `<stem>_<backbone>.npy`; `import decord` made lazy; legacy I3D
-  path intact when `--backbone` unset.
-- Tests: `tests/test_compat.py`, `tests/test_pipeline.py`, `tests/test_viz.py`,
-  `tests/test_extract.py`.
+## Where the results stand
+`docs/RESULTS_TABLE.md` — 11 heads reproduced against their papers on UCF-Crime. Best
+reproduction 0.8654 (VadCLIP, paper 0.8801); UR-DMU's official checkpoint reproduces
+**0.8697 exactly**, which is what proves the data, eval and ports are faithful. Still
+`_pending_`: `s3r`, `tpwng`, and a real `pel4vad` run (only a 200-step smoke so far).
 
-## What is NOT done (next, in PR #22 checklist)
-**Spec 1 finish (GPU):** real clip/videomae extraction on ≥1 video → raw-video
-end-to-end through the pipeline (needs decord + a sample) → `{backbone×head}` matrix
-with **real AUC** → InternVideo2/VideoMAEv2 loaders (OpenGVLab weights aren't
-transformers-native; need a custom loader).
-**Spec 2 (the real weight, NOT STARTED):** inference adapter with offline/sliding-
-window/causal modes (same pipeline API); causal-finetune recipe on cached features;
-LLM-inference-technique research track (StreamingLLM attention-sink, KV-cache, chunked
-prefill → causal-VAD); real-time benchmark (FPS/AUC/latency).
-**Spec 3 (NOT STARTED):** full qualitative suite + localization metrics + cross-matrix
-dashboard.
+`docs/REPRO_FROMSCRATCH.md` VERDICT still holds: the remaining gap to paper is a
+**feature-extraction ceiling**, not the training recipe.
 
-## Design + research (read first)
-- `docs/superpowers/specs/2026-06-16-wsvad-matrix-serving-design.md` (architecture,
-  3-spec roadmap, invariant: original training/model defs unchanged; causal is additive)
-- `docs/FEATURE_EXTRACTOR_RESEARCH.md` (backbones, data, optimization, Real-Time WSVAD)
+## Spec 2 — efficient / causal / streaming (docs/SPEC2_EFFICIENCY.md)
+Implemented: `WSAD_ATTN=window` (band SDPA + the decay as a depthwise convolution),
+`WSAD_ATTN=causal` (past-only), `src/streaming.py` (`StreamingScorer`, bit-identical to
+offline scoring in bounded memory), and `scripts/diag/bench_efficiency.py`.
 
-## Open issues found in self-review (address during Spec 1 finish / Spec 2)
-1. **[Med]** Pipeline defaults (`with_magnitude=True`, `segment_to=None`) suit visual
-   magnitude heads; text heads (tpwng/clip_tsa) trained with 32-seg & no magnitude →
-   serving/matrix config should carry **per-head preprocessing**. (Visual path OK.)
-2. **[Med]** `pipeline._set_feature_dim` sets `visual_width` to backbone dim → VadCLIP
-   on a non-512 text-aligned backbone (InternVideo2) would mismatch its CLIP-512 text
-   tower. Fine for CLIP-512 today; handle when InternVideo2 lands.
-3. **[Low]** `viz._coerce_gt` mask-vs-intervals heuristic can misread tiny inputs;
-   prefer explicit `[(start,end)]` intervals.
-4. **[Low]** `--backbone` path doesn't segment (legacy path does); add `--seg` if a
-   head needs seg32 caches.
+Three findings worth not re-deriving:
+1. **The official branch-2 is unstreamable in principle** — it divides by a whole-clip
+   normalizer. The causal path substitutes the interior limit `(1+r)/(1-r)`; that is what
+   makes streaming exact, and it is a design decision, not a detail.
+2. **UR-DMU's learned attention genuinely uses long-range context.** Band W=64 costs
+   2.2 pt AUC; the curve recovers monotonically to 0.8697 at full width.
+3. **FlexAttention does not fix the windowed path's throughput** — 5.9x on branch-1 alone,
+   but a wash-to-16%-worse at the layer level plus 68 s of compilation, because branch-1 is
+   a minority of layer cost. Kept behind `WSAD_ATTN_KERNEL=flex`, default `sdpa`.
+
+Streaming latency is **one snippet** (16 frames), not zero: attention is past-only but the
+embedding `Conv1d` keeps `padding=1`. Reported, not hidden.
+
+## Track A — better features (the actual accuracy lever)
+- **VideoMAE-base is the best screened candidate** (content 0.7209 / probe 0.6767 on the
+  40-video screen vs I3D's ~0.59 / ~0.54). Full extraction ≈ 3 h. `videomae_seg32` is
+  partially extracted; `scripts/run_phase1_videomae.sh` is idempotent — just re-run it.
+- **Cosmos-Embed1 is integrated but lost the screen** (224p: content 0.6620 / probe 0.6272)
+  at ~2x VideoMAE's cost. Do not spend the budget on it. It stays as the only text-aligned
+  video backbone besides CLIP.
+- **LanguageBind is the next thing to screen and costs zero GPU** —
+  `docs/FEATURE_SOURCES.md`, `scripts/fetch_pretrained_features.py --source languagebind`.
+  26 GB download (ask first), 10-crop × T × 768, magnitude-preserving, text-aligned, no
+  UCF-Crime in its training data.
+
+## Two loader traps already paid for — expect more of them
+Both cost a day and were silent (features came out wrong or NaN, nothing warned):
+- `transformers` v5 does not convert MCG-NJU VideoMAE's timm `q_bias`/`v_bias`, so
+  `query.bias`/`value.bias` load as **zero** (`src/features/videomae.py`).
+- v5 builds on the meta device and materializes only checkpoint tensors, so
+  `persistent=False` buffers stay uninitialized and non-checkpoint-shaped parameters get
+  reinitialized (`src/features/cosmos.py` — construct with `from_config`, then
+  `load_state_dict`).
+**Always check a new backbone's load report for MISSING/UNEXPECTED keys and sanity-check
+the feature magnitudes before extracting 1900 videos.**
+
+## Next candidates (see docs/EXTENSION_CANDIDATES.md)
+1. `pel4vad` full run (5000 steps) — the head is ported and smoke-trained. **Ask first.**
+2. LanguageBind screen — download, `feature_forensics.py`, then a short head train.
+   **Ask first.**
+3. `STPrompt` (0.8808, also localizes → Spec 3) and `MTFL` (0.8978, ships Video Swin
+   features, but no stated license).
 
 ## Gotchas
-- `gh pr edit --body` fails on this repo (Projects-classic GraphQL bug). Edit the PR
-  body via REST: `gh api repos/jinmang2/wsad/pulls/22 -X PATCH -F body=@file.md`.
-- ~~`scripts/extract_features.py` needs `PYTHONPATH=.`~~ — fixed by the editable uv install;
-  `load_dataset(..., config_name=...)` kwarg kept as-was (verify against current `datasets`).
+- `gh pr edit --body` fails on this repo (Projects-classic GraphQL bug). Use REST:
+  `gh api repos/jinmang2/wsad/pulls/22 -X PATCH -F body=@file.md`.
+- `pgrep -f "<pattern>"` matches this shell's own command line — filter it out or you will
+  "find" a job that is not running, or kill your own shell.
 
 ## Quick commands
 ```bash
-# tests
 uv run pytest -q
-# backbone extraction (needs decord + GPU for clip/videomae)
-uv run python scripts/extract_features.py --backbone clip
-# figure smoke (see /tmp/gen_fig.py pattern): plot_anomaly_scores(scores, gt=[(s,e)], legend=False, save_path=...)
+uv run python scripts/run_matrix.py --heads pel4vad --variant i3d_1024_seg200 --feature-dim 1024
+uv run python scripts/diag/bench_efficiency.py --attn eager,window:64,causal:64
+uv run python scripts/diag/feature_forensics.py --dir <feature-dir> --name <label>
 ```
