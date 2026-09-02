@@ -9,6 +9,7 @@ parameter names mirror the official state dict so the official checkpoints load
 directly (``selfatt.layers.{i}.{0,1}.{norm,fn...}``).
 """
 
+import math
 import os
 
 import torch
@@ -16,14 +17,32 @@ import torch.nn.functional as F
 from einops import rearrange
 from torch import nn
 
-# Opt-in memory-efficient attention for the dual-branch temporal Transformer. Default
+# Opt-in attention backends for the dual-branch temporal Transformer. Default
 # "eager" keeps the bit-exact path the official-checkpoint verification relies on
-# (UR-DMU max|Δ|=5.96e-08). "mem" routes branch-1 through scaled_dot_product_attention
-# (flash/mem-efficient kernel, ~1e-7 deviation) and computes branch-2 without
-# materializing the (b, h, n, n) decay matrix — so seg200 fits batch 64 on 8 GB GPUs
-# instead of OOM-ing in the O(T²) ``q·kᵀ``. Set WSAD_ATTN=mem for training the memory
-# heads at the official batch size; leave unset for verification/eval.
+# (UR-DMU max|Δ|=5.96e-08).
+#
+#   mem     branch-1 through scaled_dot_product_attention (flash/mem-efficient kernel,
+#           ~1e-7 deviation) and branch-2 without materializing the (b, h, n, n) decay
+#           matrix — so seg200 fits batch 64 on 8 GB GPUs instead of OOM-ing in the
+#           O(T²) ``q·kᵀ``. Use for training the memory heads at the official batch size.
+#   window  sliding-window (band) attention, O(T·W) memory and compute — see
+#           ``docs/SPEC2_EFFICIENCY.md``. Branch-2 is computed **exactly** (only terms
+#           with |i-j| > W are dropped, and those are ≤ exp(-W/e) ≈ 6e-11 at W=64), so
+#           only branch-1 is approximated. Peak memory is linear in T, which is what
+#           lets full-length / streaming sequences run without per-crop splitting.
+#
+# Leave unset for verification/eval.
 _ATTN_IMPL = os.environ.get("WSAD_ATTN", "eager").lower()
+# Half-width of the band for WSAD_ATTN=window; query i attends to |i-j| <= W.
+_ATTN_WINDOW = int(os.environ.get("WSAD_ATTN_WINDOW", "64"))
+# Query-block size for the windowed path. Peak mask/score memory is
+# O(T · (chunk + 2·window)); larger = fewer kernel launches, more memory.
+_ATTN_CHUNK = int(os.environ.get("WSAD_ATTN_CHUNK", "256"))
+
+# The decay is exp(-|i-j|/e) with e = exp(1), i.e. a geometric sequence in |i-j|
+# with ratio r = exp(-1/e). Naming it once keeps the windowed path provably equal
+# to the dense one on the terms it keeps.
+_DECAY_RATIO = math.exp(-1.0 / math.e)
 
 
 class PreNorm(nn.Module):
@@ -51,6 +70,87 @@ class FeedForward(nn.Module):
         return self.net(x)
 
 
+def _decay_column_sums(n: int, device, dtype) -> torch.Tensor:
+    """The ``attn2.sum(-1)`` normalizer of the dense path, in closed form (O(n) memory).
+
+    The official code divides the (symmetric) decay matrix by ``attn2.sum(-1)``, which
+    broadcasts over the last axis — element (i, j) is scaled by the sum of column j.
+    That sum is a two-sided geometric series around j and has an exact closed form, so
+    the windowed path can reproduce the dense normalizer without ever building (n, n)::
+
+        s[j] = 1 + Σ_{d=1..j} r^d + Σ_{d=1..n-1-j} r^d,   r = exp(-1/e)
+    """
+    r = _DECAY_RATIO
+    j = torch.arange(n, device=device, dtype=torch.float64)
+    left = r * (1.0 - r ** j) / (1.0 - r)
+    right = r * (1.0 - r ** (n - 1 - j)) / (1.0 - r)
+    return (1.0 + left + right).to(dtype)
+
+
+def _banded_decay(t: torch.Tensor, window: int) -> torch.Tensor:
+    """Branch-2 restricted to ``|i-j| <= window``, as a depthwise 1-D convolution.
+
+    ``out[i] = Σ_j (r^|i-j| / s[j]) · t[j]`` is a convolution of ``t / s`` with the
+    fixed symmetric kernel ``r^|d|``, so it costs O(T·W) and never materializes the
+    (n, n) decay. The dropped tail is bounded by ``r^window`` (6e-11 at W=64), which
+    is why windowing this branch is near-exact rather than an approximation.
+    """
+    b, h, n, d = t.shape
+    w = min(window, n - 1)
+    s = _decay_column_sums(n, t.device, t.dtype)
+    u = t / s.view(1, 1, n, 1)
+
+    offsets = torch.arange(-w, w + 1, device=t.device, dtype=torch.float32)
+    kernel = torch.exp(-offsets.abs() / math.e).to(t.dtype).view(1, 1, -1)
+
+    u = u.permute(0, 1, 3, 2).reshape(b * h * d, 1, n)
+    out = F.conv1d(u, kernel, padding=w)
+    return out.reshape(b, h, d, n).permute(0, 1, 3, 2)
+
+
+# Band masks depend only on the block geometry, not on the data, and the same few
+# shapes recur for every layer of every video — so build each one once.
+_MASK_CACHE: dict = {}
+
+
+def _band_mask(n_q: int, n_k: int, offset: int, window: int, device) -> torch.Tensor:
+    """``True`` where ``|i - j| <= window`` for a query block starting ``offset`` into
+    its key span."""
+    key = (n_q, n_k, offset, window, str(device))
+    mask = _MASK_CACHE.get(key)
+    if mask is None:
+        qi = torch.arange(n_q, device=device).unsqueeze(1) + offset
+        kj = torch.arange(n_k, device=device).unsqueeze(0)
+        mask = (qi - kj).abs() <= window
+        _MASK_CACHE[key] = mask
+    return mask
+
+
+def _window_attend(q, k, v, window: int, chunk: int) -> torch.Tensor:
+    """Softmax attention restricted to a band, in query blocks (O(T·(chunk+2W)) memory).
+
+    Each query block attends only to the key span it can reach, so neither the scores
+    nor the mask are ever (n, n). Every row keeps at least its own position, so no row
+    is fully masked (no NaNs).
+    """
+    n = q.shape[2]
+    if window >= n - 1:
+        # the band already covers the sequence — masking would be a no-op
+        return F.scaled_dot_product_attention(q, k, v)
+
+    outs = []
+    for start in range(0, n, chunk):
+        end = min(start + chunk, n)
+        ks, ke = max(0, start - window), min(n, end + window)
+        mask = _band_mask(end - start, ke - ks, start - ks, window, q.device)
+        outs.append(
+            F.scaled_dot_product_attention(
+                q[:, :, start:end], k[:, :, ks:ke], v[:, :, ks:ke], attn_mask=mask
+            )
+        )
+    return torch.cat(outs, dim=2) if len(outs) > 1 else outs[0]
+
+
 class Attention(nn.Module):
     """Dual-branch attention: learned ``qk·v`` + fixed distance-decay over ``t``."""
 
@@ -73,12 +173,21 @@ class Attention(nn.Module):
         qkvt = self.to_qkv(x).chunk(4, dim=-1)
         q, k, v, t = map(lambda u: rearrange(u, "b n (h d) -> b h n d", h=self.heads), qkvt)
 
+        if _ATTN_IMPL == "window":
+            # Neither branch builds an (n, n) tensor: branch-1 is banded softmax over
+            # query blocks, branch-2 is the exact banded decay as a convolution.
+            out1 = _window_attend(q, k, v, _ATTN_WINDOW, _ATTN_CHUNK)
+            out2 = _banded_decay(t, _ATTN_WINDOW)
+            out = torch.cat([out1, out2], dim=-1)
+            out = rearrange(out, "b h n d -> b n (h d)")
+            return self.to_out(out)
+
         # fixed temporal distance-decay attention (official, device-safe); (n, n)
         tmp_ones = torch.ones(n, device=x.device)
         tmp_n = torch.linspace(1, n, n, device=x.device)
         tg_tmp = torch.abs(tmp_n * tmp_ones - tmp_n.view(-1, 1))
         attn2 = torch.exp(-tg_tmp / torch.exp(torch.tensor(1.0, device=x.device)))
-        attn2 = attn2 / attn2.sum(-1)  # row-normalized (n, n), identical across b/h
+        attn2 = attn2 / attn2.sum(-1)  # (n, n), identical across b/h
 
         if _ATTN_IMPL == "mem":
             # branch-1: flash/mem-efficient kernel (no materialized (b,h,n,n) dots);

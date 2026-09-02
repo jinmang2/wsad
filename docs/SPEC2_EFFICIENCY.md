@@ -66,3 +66,63 @@ BN-WVAD running full-length on 8 GB at real-time FPS with ≤1 pt AUC drop vs `e
 - Efficiency: the FPS / peak-mem / max-T table; confirm full-length on 8 GB without per-crop
   splitting (which `mem`/per-crop currently work around). No change to the `eager` default,
   so all verified checkpoints and reproduced numbers are untouched.
+
+---
+
+## Step 1 + 2 RESULTS (implemented and measured 2026-09-02)
+
+`WSAD_ATTN=window` is in `src/modules/translayer.py` (band SDPA over query blocks +
+the decay as a depthwise 1-D convolution), with `WSAD_ATTN_WINDOW` (half-width, default
+64) and `WSAD_ATTN_CHUNK` (query block, default 256). `scripts/diag/bench_efficiency.py`
+produces both tables below; `tests/test_translayer_window.py` pins the numerics.
+
+### Quality — UR-DMU official checkpoint, UCF-Crime test (290 videos, 1.11 M frames)
+
+| attn | AUC | ΔAUC | AP | FPS | latency ms (mean/p95) | peak mem MB |
+|---|---|---|---|---|---|---|
+| `eager` | 0.8697 | +0.0000 | 0.3562 | 64244 | 60 / 84 | 2880 |
+| `mem` | 0.8697 | -0.0000 | 0.3562 | 85457 | 45 / 63 | 912 |
+| `window:64` | 0.8476 | **-0.0221** | 0.3353 | 39864 | 96 / 213 | 474 |
+| `window:256` | 0.8611 | -0.0086 | 0.3539 | 51602 | 74 / 203 | 482 |
+| `window:∞` (band ≥ T) | **0.8697** | **±0.0000** | 0.3562 | 35648 | 107 / 213 | **470** |
+
+**The ≤0.5 pt target at W=64 was NOT met — the real cost is 2.2 pt.** The design's
+structural claim held exactly as argued: branch-2 windowing is lossless (the `window:∞`
+row reproduces the official 0.8697 / 0.3562 *bit-for-bit* on real data, and the unit test
+bounds the dropped decay tail at <1e-6). The loss is entirely branch-1 — **UR-DMU's
+learned attention genuinely uses long-range context**, and AUC recovers monotonically
+with the band (0.8400 @32 → 0.8476 @64 → 0.8611 @256 → 0.8697 @full). That is a result
+about the model, not a bug in the kernel.
+
+Two things worth keeping from this table even though the headline target failed:
+- **`window:∞` is strictly better than `mem` for eval**: identical AUC, 1.9x less memory
+  (470 vs 912 MB) — because the dominant allocation in `eager` was never branch-1, it was
+  the `(b, h, n, n)` decay repeat, and the convolution removes it entirely.
+- At test-set lengths windowing is a **throughput loss** (40 k vs 64 k FPS): the masked
+  SDPA path gives up the flash kernel, and O(T·W) does not pay for itself yet at T ≈ 200–4000.
+
+### Cost vs sequence length (synthetic, 2-layer translayer, dim 512, RTX 2070 8 GB)
+
+| T | `eager` ms / MB | `mem` ms / MB | `window:64` ms / MB |
+|---|---|---|---|
+| 512 | 2 / 44 | 2 / 33 | 9 / 31 |
+| 2048 | 8 / 275 | 7 / 91 | 5 / 55 |
+| 8192 | 94 / 3719 | 57 / 872 | 14 / 151 |
+| 16384 | 8744 / 14584 | 218 / 3256 | 29 / 279 |
+| 32768 | **OOM** | 9550 / 12632 | **58 / 535** |
+
+This is where the window path earns its place. The crossover is **T ≈ 2000**; past it the
+scaling is exactly linear (T 16384 → 32768 doubles window's cost 29 → 58 ms and 279 →
+535 MB) while `eager` OOMs at 32 k and `mem` degrades to 9.5 s. At 32 k frames window is
+**165x faster than `mem` and 24x lighter**.
+
+### Verdict and revised sequencing
+- Windowing is **not** a free accuracy-preserving speedup for the existing 290-video
+  benchmark; do not switch the reported eval path to it. Keep `eager`/`mem` there.
+- It *is* the enabler for the unbounded-T streaming case Spec 2 actually targets, which
+  is the regime where `eager` cannot run at all.
+- So the AUC-vs-W curve above becomes the honest headline for Spec 2: **the streaming
+  budget buys accuracy back monotonically**, and the design question is where a live
+  deployment wants to sit on it.
+- Next (unchanged order): causal mask + its AUC delta, then `StreamingScorer` — whose
+  value is now quantified in advance by the T ≥ 8192 rows.

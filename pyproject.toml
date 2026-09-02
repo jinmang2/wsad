@@ -51,6 +51,11 @@ build-backend = "hatchling.build"
 packages = ["src"]
 dev-mode-dirs = ["."]
 
+# Editing a .py file must not trigger an editable-wheel rebuild on every `uv run`
+# (the install is path-based, so the sources are picked up live either way).
+[tool.uv]
+cache-keys = [{ file = "pyproject.toml" }]
+
 # torch/torchvision must come from the CUDA 13.0 wheel index, not PyPI (PyPI ships
 # the CPU/cu12 default build). Everything else resolves from PyPI.
 [[tool.uv.index]]
