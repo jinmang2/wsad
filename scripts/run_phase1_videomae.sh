@@ -10,7 +10,7 @@
 set -u
 cd "$(dirname "$0")/.."
 export PYTHONPATH=. WSAD_DATA="${WSAD_DATA:-$HOME/data/wsad}" PYTHONUNBUFFERED=1
-RUN="conda run --no-capture-output -n balaenoptera python -u"
+RUN="uv run python -u"
 FEAT="$WSAD_DATA/ucf_crime/features/videomae_seg32"
 MODEL="MCG-NJU/videomae-base"
 TRAIN_N=1610; TEST_N=290

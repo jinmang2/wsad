@@ -10,7 +10,7 @@ Two checks, on Gowtham's bundled ``samplevideos/Abuse001_x264.mp4``:
       ``_archive/UCF_Train_ten_crop_i3d/Abuse001_x264_i3d.npy``. Expect a tiny
       gap only (different ffmpeg version / JPG bytes), cosine ~1.0, L2 scale ~22.
 
-    conda run -n balaenoptera python scripts/verify_i3d_extract.py
+    uv run python scripts/verify_i3d_extract.py
 """
 
 import os

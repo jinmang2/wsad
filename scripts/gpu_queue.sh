@@ -12,7 +12,7 @@ cd "$(dirname "$0")/.."
 export PYTHONPATH=.
 export WSAD_DATA="${WSAD_DATA:-$HOME/data/wsad}"
 export PYTHONUNBUFFERED=1
-RUN="conda run --no-capture-output -n balaenoptera python -u scripts/run_matrix.py"
+RUN="uv run python -u scripts/run_matrix.py"
 
 run_job () {  # tag  ATTN  <run_matrix args...>
   local tag="$1"; local attn="$2"; shift 2

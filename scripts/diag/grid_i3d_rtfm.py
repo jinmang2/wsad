@@ -7,7 +7,7 @@ preprocessing knobs (resize dims x interpolation) to see if any closes the gap.
 If none beats ~0.74, the evidence-based conclusion is that RTFM used a different
 (unpublished) I3D checkpoint / extractor, not a preprocessing variant of Gowtham.
 
-    conda run -n balaenoptera python scripts/grid_i3d_rtfm.py
+    uv run python scripts/grid_i3d_rtfm.py
 
 Uses the non-local model (closest to RTFM). Each config re-extracts Abuse001
 (~90 s); results cached to /tmp/grid_i3d_<tag>.npy.

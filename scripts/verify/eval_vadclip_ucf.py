@@ -5,7 +5,7 @@ for both and the worst per-frame divergence.
 
 Run from .reference/VadCLIP/src as cwd:
   cd .reference/VadCLIP/src && PYTHONPATH=.:<repo> \
-    conda run -n balaenoptera python <repo>/scripts/eval_vadclip_ucf.py
+    uv run python <repo>/scripts/eval_vadclip_ucf.py
 """
 
 import os

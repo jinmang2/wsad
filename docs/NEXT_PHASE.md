@@ -63,3 +63,40 @@ CPU prototyping + the benchmark harness, then validates on whichever feature bas
 ## Immediate next step (proposed)
 Resolve Track A "open questions" (VideoMAE protocol + OPear leakage check + 8 GB feasibility),
 then run the **forensic gate** on a VideoMAE sample before committing to full extraction.
+
+---
+
+## Measured 2026-09-02 (gate + cost, both open questions resolved)
+
+**1. The q/v-bias fix (`14d4e04`) really did improve the features.** Forensic screen,
+identical 40-video test subset, `scripts/diag/feature_forensics.py`:
+
+| feature set | MAGNITUDE | CONTENT | PROBE |
+|---|---|---|---|
+| `videomae_GATEfix` (bias restored) | 0.5537 | **0.7209** | **0.6767** |
+| `videomae_GATE` (bias silently zeroed) | 0.4991 | 0.7072 | 0.6152 |
+| `i3d_1024_seg200` (same 40) | 0.4995 | 0.5993 | 0.5536 |
+| `i3d_mgfn` (same 40) | 0.4937 | 0.5916 | 0.5392 |
+
+VideoMAE ranks clearly above both I3D variants on every proxy, and the bias fix moved
+the linear probe +0.061 (0.615 → 0.677) and pulled magnitude off dead chance
+(0.499 → 0.554). Screen only *ranks* — the real gate is still a short head train — but
+nothing here argues against extracting the full set. The stale `videomae_GATE`
+features should be deleted.
+
+**2. Full VideoMAE-base extraction costs ~2.5–3 h, not ~30 h.** Measured on the
+RTX 2070 SUPER 8 GB with a warm cache (`uv run scripts/extract_modern.py`, marginal
+rate from a two-point fit that removes ~20–40 s of process/model startup):
+
+| split | protocol | marginal rate | projected |
+|---|---|---|---|
+| train (1610) | `--sample-to 32` | ~3.7 s/video | ~1.6 h |
+| test (290) | full length | ~10.4 s/video | ~0.9 h |
+
+The old "88 videos in 102 min" (~70 s/video) that made this look like a 30-hour job is
+**~19x slower than the extractor measures in isolation**. The cause was not established —
+the plausible candidates are GPU contention with a concurrent head train and the WSL host
+dying partway through the window (the run left no per-video timestamps, so the wall time
+may cover a long stall rather than 88 slow videos). Either way the extractor itself is
+fine: with the GPU otherwise idle this is a single evening, so
+`scripts/run_phase1_videomae.sh` is worth resuming as-is (it is idempotent/resumable).

@@ -107,11 +107,21 @@ RAM strategy, and the CLIP-feature plan: [`docs/DATA.md`](docs/DATA.md).
 
 ## Environment
 
-Conda + CUDA (PyTorch, transformers, datasets, hydra-core, accelerate, einops,
-scikit-learn). Training on cached features needs no video stack. **Feature
-extraction** additionally needs `decord` (GPU build) + `pytorchvideo` (I3D) or
-`open_clip` (CLIP) — see `docs/FEATURE_EXTRACTORS.md`. Install: `pip install -r
-requirements.txt`.
+**[uv](https://docs.astral.sh/uv/) only** — no conda. Python 3.11 + PyTorch 2.11.0 /
+CUDA 13.0, exact versions pinned in `pyproject.toml` and locked in `uv.lock` (the
+versions every number in `docs/RESULTS_TABLE.md` was produced with).
+
+```bash
+uv sync --group dev            # create .venv from the lock file
+uv run pytest -q               # 74 passed
+uv run python scripts/run_matrix.py --help
+```
+
+`uv run` installs the project editable, so `src.*`, `scripts.*` and `experiments.*`
+import directly — the old `PYTHONPATH=.` prefix is no longer needed. Training on
+cached features needs no video stack; **feature extraction** additionally uses
+`decord` (video decode) and `open_clip` / `timm` / `transformers` backbones — see
+`docs/FEATURE_EXTRACTORS.md`.
 
 ## Docs
 

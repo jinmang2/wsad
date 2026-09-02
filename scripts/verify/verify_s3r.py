@@ -7,7 +7,7 @@ off -> deterministic).
 
 Run from .reference/S3R as cwd:
   cd .reference/S3R && PYTHONPATH=.:<repo> \
-    conda run -n balaenoptera python <repo>/scripts/verify_s3r.py
+    uv run python <repo>/scripts/verify_s3r.py
 """
 
 import os

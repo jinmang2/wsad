@@ -1,5 +1,5 @@
 """Training-reproduction probe: train one head, log per-epoch ROC-AUC to a FLUSHED
-file so progress is monitorable despite ``conda run`` stdout buffering (issue #6).
+file so progress is monitorable despite subprocess stdout buffering (issue #6).
 
 Uses the correct per-head eval adapter (:mod:`src.eval_matrix`) every epoch, on
 ``test_dataset=None`` training (no double eval). Writes ``<out>`` as JSONL, one

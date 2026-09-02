@@ -6,7 +6,7 @@ and the repo port, then compares the eval-path frame scores on identical random
 
 Run from .reference/UR-DMU as cwd:
   cd .reference/UR-DMU && PYTHONPATH=.:<repo> \
-    conda run -n balaenoptera python <repo>/scripts/verify_ur_dmu.py
+    uv run python <repo>/scripts/verify_ur_dmu.py
 """
 
 import sys

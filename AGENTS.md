@@ -87,7 +87,7 @@ whole training loop fits in 6 GB VRAM (RTX 2060 target).
 ## Dependencies
 
 ### External
-- **PyTorch 2.5.1 / CUDA 12.1** — see `README.md` for the exact conda recipe (incl. source-built `decord` GPU).
+- **PyTorch 2.11.0 / CUDA 13.0** — pinned in `pyproject.toml`; `uv sync` recreates the environment.
 - **lightning** — training loop (`pl.LightningModule`, `pl.Trainer`).
 - **hydra-core / omegaconf** — config composition and CLI.
 - **transformers** — `PreTrainedModel`/`PretrainedConfig`/`ModelOutput` base classes.

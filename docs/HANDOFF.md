@@ -9,12 +9,13 @@ file once the work lands.
 - **Last commit:** `857af70` (6 commits ahead of the data-pipeline base)
 
 ## Environment (reproduce on the new PC)
-- Interpreter: **`conda run -n balaenoptera python`** (not bare python).
-- Run anything importing `src` with **`PYTHONPATH=.`** (e.g. the scripts).
-- Installed THIS session into `balaenoptera`: `open_clip_torch`, `timm`. Still missing
-  / needed for runtime work: **`decord`** (video reading for clip/videomae/raw-video
-  path), GPU + model weights for VideoMAE/InternVideo2/VideoMAEv2.
-- Tests: `conda run -n balaenoptera python -m pytest -q` → **74 passed** (scaffold only).
+- **uv only — conda is gone.** `uv sync --group dev` recreates everything from
+  `pyproject.toml` + `uv.lock` (Python 3.11, torch 2.11.0+cu130 from the PyTorch index).
+- Interpreter: **`uv run python`**. No `PYTHONPATH=.` — the project installs editable,
+  so `src.*`, `scripts.*` and `experiments.*` import directly.
+- `decord`, `open_clip_torch`, `timm`, `transformers` are all pinned in the lock file.
+  Still needed for runtime work: GPU + weights for InternVideo2 / VideoMAEv2.
+- Tests: `uv run pytest -q` → **74 passed** (verified on the uv env, 2026-09-02).
 
 ## What is DONE (Spec 1 scaffold — code only, runtime-UNVERIFIED)
 - `src/compat.py` — backbone↔head text-align guard (`assert_compatible`); flags
@@ -64,14 +65,14 @@ dashboard.
 ## Gotchas
 - `gh pr edit --body` fails on this repo (Projects-classic GraphQL bug). Edit the PR
   body via REST: `gh api repos/jinmang2/wsad/pulls/22 -X PATCH -F body=@file.md`.
-- Pre-existing: `scripts/extract_features.py` must run with `PYTHONPATH=.`;
+- ~~`scripts/extract_features.py` needs `PYTHONPATH=.`~~ — fixed by the editable uv install;
   `load_dataset(..., config_name=...)` kwarg kept as-was (verify against current `datasets`).
 
 ## Quick commands
 ```bash
 # tests
-PYTHONPATH=. conda run -n balaenoptera python -m pytest -q
+uv run pytest -q
 # backbone extraction (needs decord + GPU for clip/videomae)
-PYTHONPATH=. conda run -n balaenoptera python scripts/extract_features.py --backbone clip
+uv run python scripts/extract_features.py --backbone clip
 # figure smoke (see /tmp/gen_fig.py pattern): plot_anomaly_scores(scores, gt=[(s,e)], legend=False, save_path=...)
 ```

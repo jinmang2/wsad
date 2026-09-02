@@ -15,7 +15,7 @@ scheduler knobs) + the per-head windowed eval in `src.eval_matrix.evaluate`.
 Reproducible: fixed seed, recipe in-code, results + per-epoch log written under
 `experiments/runs/vadclip_scratch/`.
 
-    PYTHONPATH=. WSAD_DATA=~/data/wsad conda run -n balaenoptera \
+    WSAD_DATA=~/data/wsad uv run \
         python experiments/repro_vadclip.py
 
 KNOWN RISK (open): our training loss path does not yet thread per-window

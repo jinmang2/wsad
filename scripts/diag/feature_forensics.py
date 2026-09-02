@@ -29,7 +29,7 @@ Three proxies, all snippet-level, crop-averaged, reported as ``|AUC-0.5|`` too
   - **PROBE**      5-fold GroupKFold(by video) logistic-regression AUC — the
                    strongest atemporal proxy; "how linearly separable is anomaly".
 
-Run in the conda env (needs scikit-learn).
+Run with `uv run python` (needs scikit-learn).
 """
 
 import glob

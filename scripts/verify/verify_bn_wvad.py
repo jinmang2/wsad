@@ -6,7 +6,7 @@ random 1024-d input (eval = BN running stats, deterministic).
 
 Run from .reference/BN-WVAD as cwd:
   cd .reference/BN-WVAD && PYTHONPATH=.:<repo> \
-    conda run -n balaenoptera python <repo>/scripts/verify_bn_wvad.py
+    uv run python <repo>/scripts/verify_bn_wvad.py
 """
 
 import sys

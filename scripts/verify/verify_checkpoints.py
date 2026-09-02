@@ -3,7 +3,7 @@
 - MGFN: official pkl -> convert_official_to_hf.convert -> load into MGFNForVAD.
 - VadCLIP: official pth -> direct load into VadCLIPForVAD (quantify divergence).
 
-Run: conda run -n balaenoptera python scripts/_verify_ckpts.py
+Run: uv run python scripts/_verify_ckpts.py
 """
 
 import torch

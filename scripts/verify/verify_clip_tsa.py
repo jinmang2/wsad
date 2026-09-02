@@ -7,7 +7,7 @@ shared RNG seed (PerturbedTopK draws Gaussian noise; same seed -> same noise).
 
 Run from .reference/CLIP-TSA as cwd:
   cd .reference/CLIP-TSA && PYTHONPATH=.:<repo> \
-    conda run -n balaenoptera python <repo>/scripts/verify_clip_tsa.py
+    uv run python <repo>/scripts/verify_clip_tsa.py
 """
 
 import os

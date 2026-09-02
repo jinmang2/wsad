@@ -5,7 +5,7 @@ binary_logits / alignment_logits / text_features against the official oracle
 (.reference/vadclip_oracle.npz, produced by scripts/vadclip_oracle.py) on the
 same inputs.
 
-Run: PYTHONPATH=. conda run -n balaenoptera python scripts/verify_vadclip.py
+Run: uv run python scripts/verify_vadclip.py
 """
 
 import sys

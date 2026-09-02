@@ -6,7 +6,7 @@ and comparing eval-mode forward (dropout off -> deterministic).
 
 Run from .reference/RTFM as cwd:
   cd .reference/RTFM && PYTHONPATH=.:<repo> \
-    conda run -n balaenoptera python <repo>/scripts/verify_rtfm.py
+    uv run python <repo>/scripts/verify_rtfm.py
 """
 
 import os

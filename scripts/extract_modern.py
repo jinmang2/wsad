@@ -8,7 +8,7 @@ so `--backbone videomae|xclip|internvideo|clip` all dispatch here.
 
     # forensic GATE first: a small test sample, then run feature_forensics on it
     # (relative content/probe screen — confirm the set ranks above i3d before full extract)
-    PYTHONPATH=. WSAD_DATA=~/data/wsad conda run -n balaenoptera python scripts/extract_modern.py \
+    WSAD_DATA=~/data/wsad uv run python scripts/extract_modern.py \
         --backbone videomae --model-name MCG-NJU/videomae-base --split test --limit 20 \
         --out ~/data/wsad/ucf_crime/features/videomae_base_GATE
     # full run (all 1900): drop --limit, --split train then test

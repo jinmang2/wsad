@@ -8,7 +8,7 @@ to chance (0.52). Trains on the clean MGFN-lineage features (norm ~22):
     features/i3d_mgfn_seg32/  (train seg32 (10,32,2048) + test full-length (T,10,2048),
     built from the byte-verified MGFN-authors' distribution by build_mgfn_seg32.py).
 
-    PYTHONPATH=. WSAD_DATA=~/data/wsad conda run -n balaenoptera \
+    WSAD_DATA=~/data/wsad uv run \
         python experiments/repro_i3d.py            # HEAD=mgfn default
     HEAD=rtfm LR=5e-5 EPOCHS=15 python experiments/repro_i3d.py
 """

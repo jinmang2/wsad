@@ -1,6 +1,6 @@
 # scripts/
 
-Run everything with `PYTHONPATH=. WSAD_DATA=~/data/wsad conda run -n balaenoptera python scripts/<...>.py`.
+Run everything with `WSAD_DATA=~/data/wsad uv run python scripts/<...>.py`.
 
 ## Top-level (core pipeline)
 | script | purpose |
