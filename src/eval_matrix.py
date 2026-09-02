@@ -17,7 +17,7 @@ dispatching on ``(backbone, head)``. Visual heads slice their own magnitude
 channel, so an appended-magnitude feature is fine.
 """
 
-from typing import Dict
+from typing import Dict, Optional
 
 import numpy as np
 import torch
@@ -130,6 +130,35 @@ def score_video(
     return np.repeat(scores, frames_per_clip)
 
 
+def frame_metrics(
+    preds: np.ndarray,
+    labels: np.ndarray,
+    is_abnormal: Optional[np.ndarray] = None,
+    far_threshold: float = 0.5,
+) -> Dict[str, float]:
+    """Frame-level metrics from concatenated per-frame scores and labels.
+
+    Shared by :func:`evaluate` and ``WSVADTrainer.evaluate`` so the two cannot drift.
+    ``is_abnormal`` marks which frames came from anomalous *videos*; pass ``None`` to get
+    only the two primary metrics.
+    """
+    fpr, tpr, _ = roc_curve(labels, preds)
+    precision, recall, _ = precision_recall_curve(labels, preds)
+    metrics = {"roc_auc": float(auc(fpr, tpr)), "pr_auc": float(auc(recall, precision))}
+    if is_abnormal is None:
+        return metrics
+
+    abn_label, abn_pred = labels[is_abnormal], preds[is_abnormal]
+    if abn_label.size and 0 < abn_label.sum() < abn_label.size:
+        f, t, _ = roc_curve(abn_label, abn_pred)
+        metrics["abnormal_auc"] = float(auc(f, t))
+
+    normal_pred = preds[~is_abnormal]
+    if normal_pred.size:
+        metrics["far_normal"] = float((normal_pred > far_threshold).mean())
+    return metrics
+
+
 @torch.no_grad()
 def evaluate(
     model: torch.nn.Module,
@@ -138,10 +167,28 @@ def evaluate(
     head: str,
     device: str = "cpu",
     frames_per_clip: int = 16,
+    far_threshold: float = 0.5,
 ) -> Dict[str, float]:
-    """Frame-level ROC-AUC / PR-AUC over the UCF-Crime test set."""
+    """Frame-level metrics over the UCF-Crime test set.
+
+    ``roc_auc`` is the primary number every paper reports, but it is a weak discriminator
+    here: the test set is dominated by normal frames, so a model that merely separates
+    normal *videos* from anomalous ones already scores well. The plan
+    (WSAD_INTEGRATION_PLAN.md §8) asks for two secondary metrics that do not have that
+    escape hatch, and this returns them alongside:
+
+    - ``abnormal_auc`` — ROC-AUC computed **only over frames from anomalous videos**. Every
+      video in the subset contains both normal and anomalous frames, so this measures
+      temporal localization rather than video-level separability. It is always the harder
+      number and it is where methods actually differ.
+    - ``far_normal`` — the false-alarm rate on normal videos: the fraction of their frames
+      scored above ``far_threshold``. A model can buy AUC with a globally raised score
+      curve; this catches that.
+
+    Returned as extra keys, so existing ``roc_auc``/``pr_auc`` numbers stay comparable.
+    """
     model.eval()
-    preds, labels = [], []
+    preds, labels, is_abnormal = [], [], []
     for i in range(len(test_dataset)):
         s = test_dataset[i]
         p = score_video(model, s["feature"], backbone, head, device, frames_per_clip)
@@ -149,9 +196,9 @@ def evaluate(
         n = min(len(p), len(y))
         preds.append(p[:n])
         labels.append(y[:n])
+        is_abnormal.append(np.full(n, float(np.asarray(s["anomaly"]).item()) > 0.5))
     preds = np.concatenate(preds)
     labels = np.concatenate(labels)
+    is_abnormal = np.concatenate(is_abnormal)
 
-    fpr, tpr, _ = roc_curve(labels, preds)
-    precision, recall, _ = precision_recall_curve(labels, preds)
-    return {"roc_auc": float(auc(fpr, tpr)), "pr_auc": float(auc(recall, precision))}
+    return frame_metrics(preds, labels, is_abnormal, far_threshold)

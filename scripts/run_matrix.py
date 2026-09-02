@@ -63,7 +63,7 @@ HEADS = {
     "clip_tsa": dict(runner="clip_tsa", text=False, magnitude=False, segment=32, length=None, steps=4000, batch=16, lr=1e-3, wd=5e-3),  # [ref] CLIP-TSA main.py:122 wd=0.005
     "vadclip": dict(runner="vadclip", text=True, magnitude=False, segment=None, length=256, steps=3000, batch=64, lr=2e-5, wd=1e-2),    # [ref] VadCLIP AdamW (official ckpt used)
     "tpwng": dict(runner="tpwng", text=True, magnitude=False, segment=32, length=None, steps=3000, batch=16, lr=1e-3, wd=5e-3),    # [est] TPWNG (paper-only)
-    "pel4vad": dict(runner="pel4vad", text=False, magnitude=False, segment=32, length=None, steps=5000, batch=64, lr=5e-4, wd=0.0),  # [ref] PEL4VAD main.py Adam lr=5e-4, bs=128 total (paper 0.8676 on 1024-d I3D)
+    "pel4vad": dict(runner="pel4vad", text=False, magnitude=False, segment=32, length=None, steps=6290, batch=64, lr=5e-4, wd=0.0),  # [ref] PEL4VAD: 50 epochs x (16100 crop-samples / bs 128) = 6290 steps, Adam lr=5e-4 (paper 0.8676 on 1024-d I3D)
 }
 
 # paper-faithful official head checkpoints present locally (eval-only).
@@ -143,6 +143,16 @@ def _load_official(model, path: str, head: str):
     return model
 
 
+def _secondary(metrics: dict) -> dict:
+    """The plan's secondary metrics (WSAD_INTEGRATION_PLAN.md §8), when the eval produced
+    them: localization-only AUC and the false-alarm rate on normal videos."""
+    return {
+        k: round(metrics[k], 4)
+        for k in ("abnormal_auc", "far_normal")
+        if metrics.get(k) is not None
+    }
+
+
 def run_pair(
     backbone: str,
     head: str,
@@ -179,6 +189,7 @@ def run_pair(
             "backbone": backbone, "head": head, "feature": feat_tag, "dim": dim_override or BACKBONE_DIM[backbone],
             "steps": 0, "source": "official-ckpt",
             "roc_auc": round(metrics["roc_auc"], 4), "pr_auc": round(metrics["pr_auc"], 4),
+            **_secondary(metrics),
             "best_step": -1, "n_test": len(test_set), "seconds": round(time.time() - t0, 1),
         }
 
@@ -230,6 +241,7 @@ def run_pair(
         "backbone": backbone, "head": head, "feature": feat_tag, "dim": dim_override or BACKBONE_DIM[backbone],
         "steps": max_steps, "batch": 2 * bs, "lr": lr, "wd": wd_v, "source": "trained",
         "roc_auc": round(best["roc_auc"], 4), "pr_auc": round(best["pr_auc"], 4),
+        **_secondary(best),
         "best_step": best["best_step"], "last_auc": round(best["last"], 4),
         "auc_mean": best.get("auc_mean"), "auc_std": best.get("auc_std"), "lr_decay": lr_decay,
         "n_test": len(test_set), "seconds": round(time.time() - t0, 1),

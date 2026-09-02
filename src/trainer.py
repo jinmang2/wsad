@@ -178,7 +178,7 @@ class WSVADTrainer:
             best["last"] = m["roc_auc"]
             sel = m.get(select_metric, m["roc_auc"])
             if sel > best["_sel"]:
-                best.update(roc_auc=m["roc_auc"], pr_auc=m["pr_auc"], best_epoch=epoch, _sel=sel)
+                best.update(m, best_epoch=epoch, _sel=sel)
             model.train()
             return m
 
@@ -302,7 +302,9 @@ class WSVADTrainer:
                 eval_aucs.append(m["roc_auc"])
                 sel = m.get(select_metric, m["roc_auc"])
                 if sel > best["_sel"]:
-                    best.update(roc_auc=m["roc_auc"], pr_auc=m["pr_auc"], best_step=step, _sel=sel)
+                    # carry every metric the eval returned (abnormal_auc / far_normal too),
+                    # so the reported row describes the checkpoint actually selected
+                    best.update(m, best_step=step, _sel=sel)
                 self.accelerator.print(
                     {"step": step, "lr": round(optimizer.param_groups[0]["lr"], 6),
                      "train_loss": round(run_loss / eval_interval, 4),
@@ -324,7 +326,9 @@ class WSVADTrainer:
         model = self.accelerator.unwrap_model(self.model).eval()
         device = str(self.accelerator.device)
 
-        preds, labels = [], []
+        from src.eval_matrix import frame_metrics
+
+        preds, labels, is_abnormal = [], [], []
         for i in range(len(test_dataset)):
             s = test_dataset[i]
             p = score_feature(model, s["feature"], self.frames_per_clip, device)
@@ -332,15 +336,10 @@ class WSVADTrainer:
             n = min(len(p), len(y))
             preds.append(p[:n])
             labels.append(y[:n])
-        preds = np.concatenate(preds)
-        labels = np.concatenate(labels)
-
-        fpr, tpr, _ = roc_curve(labels, preds)
-        precision, recall, _ = precision_recall_curve(labels, preds)
-        return {
-            "roc_auc": float(auc(fpr, tpr)),
-            "pr_auc": float(auc(recall, precision)),
-        }
+            is_abnormal.append(np.full(n, float(np.asarray(s["anomaly"]).item()) > 0.5))
+        return frame_metrics(
+            np.concatenate(preds), np.concatenate(labels), np.concatenate(is_abnormal)
+        )
 
     def save(self, path: str):
         self.accelerator.wait_for_everyone()
