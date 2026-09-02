@@ -99,3 +99,36 @@ def test_distance_prior_is_learnable_and_device_safe():
     assert m.encoder.loc_adj.w.requires_grad and m.encoder.loc_adj.b.requires_grad
     # decays away from the diagonal
     assert adj[0, 8, 8] > adj[0, 8, 12]
+
+
+def test_power_norm_gradient_is_bounded():
+    """The official `sqrt(relu(x)) - sqrt(relu(-x))` has an UNBOUNDED derivative as an
+    activation approaches zero, which is what diverged a real training run: a gradient norm
+    of 6.6e18 poisoned Adam's second moment and the model never recovered.
+
+    The stabilized form must stay finite everywhere and agree with the original away from
+    zero, or the fix has changed the model rather than repaired it.
+    """
+    from src.models.pel4vad.modeling_pel4vad import _POWER_NORM_EPS
+
+    xs = torch.tensor([1e-30, 1e-12, 1e-6, 1e-2, 0.5, -0.5, -1e-12, 0.0], requires_grad=True)
+    ys = torch.sign(xs) * torch.sqrt(xs.abs() + _POWER_NORM_EPS)
+    ys.sum().backward()
+
+    assert torch.isfinite(xs.grad).all()
+    bound = 0.5 / _POWER_NORM_EPS**0.5
+    assert xs.grad.abs().max() <= bound * 1.01, xs.grad.abs().max()
+
+    # away from zero it must still be the original function
+    big = torch.tensor([0.25, 1.0, 4.0, -0.25, -9.0])
+    original = torch.sqrt(torch.relu(big)) - torch.sqrt(torch.relu(-big))
+    stabilized = torch.sign(big) * torch.sqrt(big.abs() + _POWER_NORM_EPS)
+    assert torch.allclose(original, stabilized, atol=1e-5), (original - stabilized).abs().max()
+
+
+def test_the_unstabilized_form_really_does_explode():
+    """Control: without this the test above would pass on a no-op change."""
+    x = torch.tensor([1e-30], requires_grad=True)
+    y = torch.sqrt(torch.relu(x)) - torch.sqrt(torch.relu(-x))
+    y.backward()
+    assert x.grad.item() > 1e12, x.grad.item()

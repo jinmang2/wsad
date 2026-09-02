@@ -268,6 +268,30 @@ def write_table(results: list, out_md: str) -> None:
                 row.append(f"{r['roc_auc']:.4f}{tag}")
         lines.append("| " + " | ".join(row) + " |")
     lines += ["", "`*` = official checkpoint (eval-only, paper-faithful); others trained from scratch.", ""]
+
+    # Secondary metrics (WSAD_INTEGRATION_PLAN.md §8). Kept in their own table rather than
+    # crammed into the matrix: `abnormal_auc` is the localization number and is always the
+    # harder one, so it deserves to be read next to the headline AUC, not hidden behind it.
+    detailed = [r for r in results if r.get("abnormal_auc") is not None]
+    if detailed:
+        lines += [
+            "## Secondary metrics",
+            "",
+            "`abnormal_auc` = ROC-AUC over frames of anomalous videos only (localization, not",
+            "video-level separability). `far_normal` = fraction of normal-video frames scored",
+            "above 0.5 — lower is better.",
+            "",
+            "| backbone | head | roc_auc | abnormal_auc | far_normal |",
+            "|---|---|---|---|---|",
+        ]
+        for r in sorted(detailed, key=lambda r: -r["roc_auc"]):
+            far = r.get("far_normal")
+            lines.append(
+                f"| {r['backbone']} | {r['head']} | {r['roc_auc']:.4f} | "
+                f"{r['abnormal_auc']:.4f} | " + (f"{far:.4f} |" if far is not None else "— |")
+            )
+        lines.append("")
+
     with open(out_md, "w") as f:
         f.write("\n".join(lines))
 

@@ -22,3 +22,24 @@ and learning (loss 1.41 → 0.86, AUC 0.8256 → 0.8281 across the two evals, st
 which is what the smoke was for. Replace the row with a real number before comparing it to
 anything, and note the crop-handling gap documented in `modeling_pel4vad.py`: the official
 run trains on individual crops (10x samples + augmentation) where this port averages them.
+
+### PEL4VAD divergence (2026-09-02) and its cause
+
+The first full run diverged: AUC 0.8079 at step 300, then 0.5697 at both step 600 and 900,
+with train loss climbing 1.01 → 3.46 → 5.42. Reproduced on real cached features and traced
+to the **signed power normalization** in `TCA`. The official expression,
+`sqrt(relu(x)) - sqrt(relu(-x))`, has derivative `0.5/sqrt(|x|)` — unbounded as an
+activation approaches zero: measured 5e17 at x = 1e-36, and the run hit a total gradient
+norm of **6.6e18**. Adam then absorbs that spike into its second moment and throttles the
+affected parameters for thousands of steps, which is why the collapse was permanent rather
+than a transient spike.
+
+Fixed by writing it as `sign(x)·sqrt(|x| + 1e-6)` — the same function away from zero (values
+differ by under 5e-7 for activations of order 1) with the derivative bounded at 500. Verified
+on the same seed and step budget that previously exploded: gradient norm at step 850 goes
+from 6.6e18 to 0.43, and the loss decreases monotonically 2.46 → 0.117 over 900 steps.
+
+Worth noting for other ports: the official code carries the same unbounded expression. It is
+plausible that averaging 10 crops (see the crop-handling note above) produces smoother
+activations that land near zero more often than the official single-crop inputs do, which
+would make this repo hit a landmine the original rarely steps on.

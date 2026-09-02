@@ -50,6 +50,16 @@ from src.registry import MODELS
 
 from .configuration_pel4vad import PEL4VADConfig
 
+# Stabilizes the signed power normalization. The official expression is
+# ``sqrt(relu(x)) - sqrt(relu(-x))``, whose derivative is ``0.5/sqrt(|x|)`` — **unbounded**
+# as an activation approaches zero. Measured: at x = 1e-36 the gradient is 5e17, and a
+# training run hit a total gradient norm of 6.6e18 and never recovered, because Adam's
+# second moment absorbs the spike and throttles that parameter for thousands of steps
+# afterwards (loss 1.01 -> 3.46 -> 5.42, AUC 0.81 -> 0.57). Writing it as
+# ``sign(x)·sqrt(|x| + eps)`` is the same function away from zero — the value differs by
+# under 5e-7 for activations of order 1 — with the derivative bounded at 0.5/sqrt(eps).
+_POWER_NORM_EPS = 1e-6
+
 # Vendored from PEL4VAD (MIT): CLIP text embeddings of the 14 UCF-Crime class prompts.
 # Its `prompt_extract/list/ucf_label.list` order — normal event, abuse, arrest, arson,
 # assault, burglary, explosion, fighting, road accidents, robbery, shooting, shoplifting,
@@ -115,8 +125,8 @@ class TCA(nn.Module):
 
         alpha = torch.sigmoid(self.alpha)
         out = alpha * glb + (1 - alpha) * lcl
-        if self.norm:  # signed power norm then L2, as in the official code
-            out = torch.sqrt(F.relu(out)) - torch.sqrt(F.relu(-out))
+        if self.norm:  # signed power norm then L2
+            out = torch.sign(out) * torch.sqrt(out.abs() + _POWER_NORM_EPS)
             out = F.normalize(out)
         return self.o(out).view(-1, t, x.shape[2])
 
