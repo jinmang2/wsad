@@ -24,6 +24,15 @@ Deviations from the official code, all deliberate:
     which is what lets this head run on the 2048-d and 768-d variants too.
   - **The prompt term is optional.** It needs per-video class ids; without them the head
     trains on the MIL term alone rather than failing.
+
+**Known fidelity gap — crop handling at training time.** The official `list/ucf/train.list`
+has 16100 entries for 1610 videos: each of the 10 crops is a *separate training sample*, so
+the official run sees 10x the samples and gets crop-level augmentation for free (its test
+loader then averages the 10 crops per video). This repo's loader hands every head
+`(B, ncrops, T, D)` and this port averages the crops, matching what `gs_moe` and the other
+single-crop heads here do — consistent across the matrix, but **not** the official recipe.
+If a full run lands short of the paper's 0.8676, this is the first thing to suspect, and
+sampling one random crop per video during training is the cheap experiment.
 """
 
 from dataclasses import dataclass

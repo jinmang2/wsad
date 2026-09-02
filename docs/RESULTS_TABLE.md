@@ -16,7 +16,9 @@ Frame-level ROC-AUC on the 290-video test split. `*` = official checkpoint.
 | tpwng | clip | _pending_ | 0.8779 | — | — |
 | pel4vad | i3d_1024_seg200 | _0.8281 (200-step smoke)_ | 0.8676 | — | `outputs/pel4vad_smoke.log` |
 
-`pel4vad` is a **200-step smoke run**, not a reproduction — the official recipe is 5000
-steps. It is listed because the port is wired and learning (loss 1.41 → 0.86, AUC 0.8256 →
-0.8281 across the two evals, still rising), which is what the smoke was for. Replace the
-row with a real number before comparing it to anything.
+`pel4vad` is a **200-step smoke run**, not a reproduction — the official recipe is ~6290
+steps (16100 crop-samples / batch 128 x 50 epochs). It is listed because the port is wired
+and learning (loss 1.41 → 0.86, AUC 0.8256 → 0.8281 across the two evals, still rising),
+which is what the smoke was for. Replace the row with a real number before comparing it to
+anything, and note the crop-handling gap documented in `modeling_pel4vad.py`: the official
+run trains on individual crops (10x samples + augmentation) where this port averages them.
