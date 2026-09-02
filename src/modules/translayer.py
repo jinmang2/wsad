@@ -44,6 +44,12 @@ _ATTN_WINDOW = int(os.environ.get("WSAD_ATTN_WINDOW", "64"))
 # Query-block size for the windowed path. Peak mask/score memory is
 # O(T · (chunk + 2·window)); larger = fewer kernel launches, more memory.
 _ATTN_CHUNK = int(os.environ.get("WSAD_ATTN_CHUNK", "256"))
+# Kernel behind the banded softmax: "sdpa" (default, the chunked masked-SDPA loop) or
+# "flex" (torch.compile'd FlexAttention with a block-sparse mask). Measured on the
+# RTX 2070 SUPER, both numerically equal to ~2e-7, flex is 3.5-5.9x faster at T >= 8192
+# and slightly lighter; below that they trade places and flex pays a compile cost. Default
+# stays sdpa — flex is the choice for long/streaming sequences. See docs/SPEC2_EFFICIENCY.md.
+_ATTN_KERNEL = os.environ.get("WSAD_ATTN_KERNEL", "sdpa").lower()
 
 # The decay is exp(-|i-j|/e) with e = exp(1), i.e. a geometric sequence in |i-j|
 # with ratio r = exp(-1/e). Naming it once keeps the windowed path provably equal
@@ -168,6 +174,57 @@ def _causal_banded_decay(t: torch.Tensor, window: int) -> torch.Tensor:
     return out.reshape(b, h, d, n).permute(0, 1, 3, 2)
 
 
+_FLEX_CACHE: dict = {}
+
+
+def _flex_window_attend(q, k, v, window: int, causal: bool):
+    """Banded attention through FlexAttention's block-sparse kernel.
+
+    Returns ``None`` if FlexAttention is unavailable or refuses this input, so the caller
+    can fall back rather than fail — this path is an optimization, never a requirement.
+
+    Two details matter and are easy to get wrong:
+      * ``flex_attention`` **must** be wrapped in ``torch.compile``. Called eagerly it warns
+        and materializes the full (T, T) score matrix, which throws away the entire point.
+      * ``create_block_mask`` needs ``_compile=True`` at long T. Without it, mask
+        construction itself allocates a dense mask and OOMs at T=32768 on an 8 GB card.
+    """
+    try:
+        from torch.nn.attention.flex_attention import create_block_mask, flex_attention
+    except Exception:
+        return None
+
+    n = q.shape[2]
+    key = (n, window, causal, str(q.device))
+    entry = _FLEX_CACHE.get(key)
+    if entry is None:
+        def mask_mod(b, h, q_idx, kv_idx):
+            delta = q_idx - kv_idx
+            return (delta >= 0) & (delta <= window) if causal else (delta.abs() <= window)
+
+        try:
+            block_mask = create_block_mask(
+                mask_mod, B=None, H=None, Q_LEN=n, KV_LEN=n, device=q.device, _compile=True
+            )
+        except Exception:
+            _FLEX_CACHE[key] = False
+            return None
+        compiled = _FLEX_CACHE.get("_fn")
+        if compiled is None:
+            compiled = torch.compile(flex_attention, dynamic=False)
+            _FLEX_CACHE["_fn"] = compiled
+        entry = _FLEX_CACHE[key] = (block_mask, compiled)
+    if entry is False:
+        return None
+
+    block_mask, compiled = entry
+    try:
+        return compiled(q, k, v, block_mask=block_mask)
+    except Exception:
+        _FLEX_CACHE[key] = False
+        return None
+
+
 def _window_attend(q, k, v, window: int, chunk: int, causal: bool = False) -> torch.Tensor:
     """Softmax attention restricted to a band, in query blocks (O(T·(chunk+2W)) memory).
 
@@ -179,6 +236,11 @@ def _window_attend(q, k, v, window: int, chunk: int, causal: bool = False) -> to
     if window >= n - 1:
         # the band already covers the reachable span — only causality still constrains
         return F.scaled_dot_product_attention(q, k, v, is_causal=causal)
+
+    if _ATTN_KERNEL == "flex":
+        out = _flex_window_attend(q, k, v, window, causal)
+        if out is not None:
+            return out
 
     outs = []
     for start in range(0, n, chunk):

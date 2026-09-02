@@ -193,3 +193,38 @@ def test_causal_full_width_matches_a_dense_causal_reference():
         want = attn.to_out(rearrange(torch.cat([out1, out2], dim=-1), "b h n d -> b n (h d)"))
 
     assert torch.allclose(got, want, atol=1e-5), (got - want).abs().max()
+
+
+def test_flex_kernel_agrees_with_the_sdpa_kernel():
+    """`WSAD_ATTN_KERNEL=flex` is an optimization, so it must be numerically invisible."""
+    pytest.importorskip("torch.nn.attention.flex_attention")
+    torch.manual_seed(0)
+    n = 256
+    q, k, v = (torch.randn(1, 2, n, 32) for _ in range(3))
+
+    saved = T._ATTN_KERNEL
+    try:
+        T._ATTN_KERNEL = "sdpa"
+        want = T._window_attend(q, k, v, window=32, chunk=128)
+        T._ATTN_KERNEL = "flex"
+        got = T._window_attend(q, k, v, window=32, chunk=128)
+    finally:
+        T._ATTN_KERNEL = saved
+
+    assert torch.allclose(got, want, atol=1e-4), (got - want).abs().max()
+
+
+def test_flex_kernel_falls_back_instead_of_failing():
+    """A refused or unavailable FlexAttention must degrade to the chunked path, never raise."""
+    saved = T._ATTN_KERNEL
+    T._FLEX_CACHE.clear()
+    try:
+        T._ATTN_KERNEL = "flex"
+        torch.manual_seed(0)
+        q, k, v = (torch.randn(1, 2, 96, 16) for _ in range(3))
+        T._FLEX_CACHE[(96, 16, False, "cpu")] = False  # simulate "this shape was refused"
+        out = T._window_attend(q, k, v, window=16, chunk=64)
+        assert out.shape == q.shape and torch.isfinite(out).all()
+    finally:
+        T._ATTN_KERNEL = saved
+        T._FLEX_CACHE.clear()

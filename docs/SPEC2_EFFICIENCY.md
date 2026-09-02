@@ -167,3 +167,49 @@ invariance; and that the model never sees more than `left + chunk + right` frame
 ### Still to measure (needs the GPU, currently held by the Cosmos gate)
 `causal:W` rows in `bench_efficiency.py` — the AUC price of removing lookahead at matched
 band width, and the streaming FPS / per-chunk latency at T ≥ 8192.
+
+## FlexAttention — tried, measured, NOT adopted as the default (2026-09-02)
+
+The windowed path loses throughput because a masked SDPA gives up the flash kernel, so the
+obvious fix was `torch.nn.attention.flex_attention` (in torch 2.11): a block-sparse kernel
+built for exactly this mask. It is implemented and available as `WSAD_ATTN_KERNEL=flex`,
+with a fallback to the chunked path if it is unavailable or refuses a shape. It is **not**
+the default, and the measurements are why.
+
+### Isolated branch-1 — flex looks like a large win
+
+| T | chunked SDPA | flex (compiled) | speedup |
+|---|---|---|---|
+| 512 | 0.29 ms | 0.19 ms | 1.51x |
+| 8192 | 3.83 ms | 1.10 ms | 3.48x |
+| 32768 | 17.80 ms | 3.02 ms | **5.89x** |
+| 65536 | 28.20 ms | 7.55 ms | 3.73x |
+
+Numerically identical (max|Δ| ≈ 2e-7) and marginally lighter. Two traps found on the way:
+`flex_attention` **must** be wrapped in `torch.compile` — called eagerly it warns and
+materializes the full (T, T) score matrix, discarding the entire point — and
+`create_block_mask` needs `_compile=True`, or building the mask itself OOMs 8 GB at
+T = 32768.
+
+### Full translayer — the win evaporates
+
+| T | kernel | cold (incl. compile) | steady state |
+|---|---|---|---|
+| 8192 | sdpa | 1374 ms | **18.43 ms** |
+| 8192 | flex | **67852 ms** | 18.71 ms |
+| 32768 | sdpa | 74 ms | **62.10 ms** |
+| 32768 | flex | 1723 ms | 72.03 ms |
+
+Steady state is a wash at 8 k and **16% worse** at 32 k, and the cold cost is
+catastrophic — **68 seconds** of compilation at T = 8192. Amortizing it over many chunks
+does not help, because there is nothing left to amortize into: the gain is gone by then.
+
+The reason the isolated number does not survive is that branch-1 is a **minority of layer
+cost**. The decay convolution, the FFN and the LayerNorms dominate, so a 5.9x on one part
+of ~25% of the runtime cannot move the total, and flex's own overhead more than eats it.
+That also re-frames the earlier throughput finding: the windowed path's regression is not
+mainly a flash-kernel problem, so a better attention kernel was never going to fix it.
+
+**Kept as an opt-in flag, not deleted**, because the isolated result may well hold on a
+card with different kernel selection — but on this hardware the honest answer to "does
+FlexAttention fix the windowed path?" is **no**, and the default stays `sdpa`.
