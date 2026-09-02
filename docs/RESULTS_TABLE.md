@@ -20,8 +20,7 @@ Frame-level ROC-AUC on the 290-video test split. `*` = official checkpoint.
 steps (16100 crop-samples / batch 128 x 50 epochs). It is listed because the port is wired
 and learning (loss 1.41 → 0.86, AUC 0.8256 → 0.8281 across the two evals, still rising),
 which is what the smoke was for. Replace the row with a real number before comparing it to
-anything, and note the crop-handling gap documented in `modeling_pel4vad.py`: the official
-run trains on individual crops (10x samples + augmentation) where this port averages them.
+anything.
 
 ### PEL4VAD divergence (2026-09-02) and its cause
 
@@ -43,3 +42,21 @@ Worth noting for other ports: the official code carries the same unbounded expre
 plausible that averaging 10 crops (see the crop-handling note above) produces smoother
 activations that land near zero more often than the official single-crop inputs do, which
 would make this repo hit a landmine the original rarely steps on.
+
+
+### Single-crop training samples (`crop_sampling`, 2026-09-03)
+
+`FeatureDataset(crop_sampling="random")` returns one uniformly-chosen crop per access
+instead of all ten, which is what the official 10-crop recipes actually train on (PEL4VAD's
+`train.list`: 16100 entries for 1610 videos). Evaluation is untouched — it still averages
+all ten crops, so every number in the table above stays comparable.
+
+It reads the crop by seeking to its byte offset inside the `.npy` rather than loading the
+array. Memory-mapping alone was not enough: kernel readahead faults in most of an 8 MB file
+anyway and only saved 19%. Measured on cold pages over 48 videos, disk reads go
+**3.83 → 1.29 MB per sample (3.0x)** and wall time 2.73 → 1.05 s. That is short of the
+theoretical 10x because readahead still over-reads (1.29 vs the 0.82 MB a crop occupies).
+
+Enabled for `pel4vad` only. Any other head whose paper trains per-crop should set
+`crop_sampling="random"` in its `HEADS` entry; heads that genuinely want the crop average
+should leave it unset.

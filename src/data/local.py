@@ -254,12 +254,17 @@ def build_datasets_local(data_cfg):
     names = list(train_vals)
     normal = [n for n in names if "Normal" in n]
     abnormal = [n for n in names if "Normal" not in n]
+    # Optional per-head crop sampling for TRAINING only (test always averages all crops,
+    # which is the protocol every reported number was produced with). See FeatureDataset.
+    crop_sampling = getattr(data_cfg, "train_crop_sampling", None)
     train = {
         "normal": FeatureDataset(
-            normal, {f: train_vals[f] for f in normal}, open_func=i3d_open, with_magnitude=with_mag
+            normal, {f: train_vals[f] for f in normal}, open_func=i3d_open,
+            with_magnitude=with_mag, crop_sampling=crop_sampling,
         ),
         "abnormal": FeatureDataset(
-            abnormal, {f: train_vals[f] for f in abnormal}, open_func=i3d_open, with_magnitude=with_mag
+            abnormal, {f: train_vals[f] for f in abnormal}, open_func=i3d_open,
+            with_magnitude=with_mag, crop_sampling=crop_sampling,
         ),
     }
 

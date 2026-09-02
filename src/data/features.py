@@ -53,7 +53,22 @@ def _is_anom(fname: str) -> bool:
 
 
 class FeatureDataset(Dataset):
-    """Zip-backed cached features (current I3D seg32 cache)."""
+    """Zip-backed cached features (current I3D seg32 cache).
+
+    ``crop_sampling="random"`` returns **one uniformly-chosen crop** per access instead of
+    all ten. That is what the official 10-crop training protocols actually do — PEL4VAD's
+    ``train.list``, for instance, has 16100 entries for 1610 videos because every crop is
+    its own training sample — whereas averaging the crops both departs from the recipe and
+    smooths the features.
+
+    It is also the difference between reading 8.2 MB and 0.82 MB per sample: the cached
+    arrays are ``(ncrops, T, D)`` and C-contiguous, so a single crop is one contiguous
+    slice, and memory-mapping means only that slice is faulted in. At batch 128 that is
+    1.05 GB per step against 0.10 GB.
+
+    Use it for **training only** — evaluation must keep averaging all ten crops, which is
+    the protocol every reported number here was produced with.
+    """
 
     def __init__(
         self,
@@ -62,20 +77,59 @@ class FeatureDataset(Dataset):
         labels: Optional[Dict[str, float]] = None,
         open_func: Optional[Callable] = None,
         with_magnitude: bool = True,
+        crop_sampling: Optional[str] = None,
     ):
+        if crop_sampling not in (None, "random"):
+            raise ValueError(f"crop_sampling must be None or 'random', got {crop_sampling!r}")
         self.filenames = filenames
         self.values = values
         self.labels = labels
         self.open_func = open_func
         self.with_magnitude = with_magnitude
+        self.crop_sampling = crop_sampling
 
     def __len__(self) -> int:
         return len(self.values)
 
     def open(self, value: Union[zipfile.ZipInfo, np.ndarray]) -> np.ndarray:
-        if self.open_func is None:
-            return value
-        return np.load(self.open_func(value))  # dynamic (lazy) load
+        if self.open_func is None:  # eager array already in RAM
+            return self._pick_crop(value)
+        if self.crop_sampling is None:
+            return np.load(self.open_func(value))  # dynamic (lazy) load
+        return self._read_one_crop(self.open_func(value))
+
+    def _pick_crop(self, feature: np.ndarray) -> np.ndarray:
+        """One random crop, kept 3-D as ``(1, T, D)`` so downstream shapes are unchanged."""
+        if self.crop_sampling is None or feature.ndim != 3:
+            return np.asarray(feature)
+        crop = int(np.random.randint(feature.shape[0]))
+        return np.array(feature[crop : crop + 1])
+
+    def _read_one_crop(self, path: str) -> np.ndarray:
+        """Read a single crop's bytes straight out of the ``.npy``, without the rest.
+
+        Memory-mapping is not enough here: the kernel's readahead faults in most of an
+        8 MB file anyway, which measured only a 19% saving. Seeking to the crop's offset
+        and reading exactly its bytes gets the full 10x, because the arrays are
+        ``(ncrops, T, D)`` and C-contiguous so a crop is one contiguous block.
+
+        Falls back to a normal load for any layout this cannot address safely.
+        """
+        with open(path, "rb") as fh:
+            major, minor = np.lib.format.read_magic(fh)
+            reader = getattr(np.lib.format, f"read_array_header_{major}_{minor}", None)
+            if reader is None:  # an .npy version this numpy cannot parse header-only
+                fh.seek(0)
+                return self._pick_crop(np.load(fh))
+            shape, fortran, dtype = reader(fh)
+            if fortran or len(shape) != 3 or dtype.hasobject:
+                fh.seek(0)
+                return self._pick_crop(np.load(fh))
+            crop = int(np.random.randint(shape[0]))
+            count = int(shape[1]) * int(shape[2])
+            fh.seek(crop * count * dtype.itemsize, 1)
+            data = np.fromfile(fh, dtype=dtype, count=count)
+        return data.reshape(1, shape[1], shape[2])
 
     def get_filename(self, idx: int) -> str:
         return self.filenames[idx]

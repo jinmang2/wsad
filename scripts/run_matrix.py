@@ -63,7 +63,7 @@ HEADS = {
     "clip_tsa": dict(runner="clip_tsa", text=False, magnitude=False, segment=32, length=None, steps=4000, batch=16, lr=1e-3, wd=5e-3),  # [ref] CLIP-TSA main.py:122 wd=0.005
     "vadclip": dict(runner="vadclip", text=True, magnitude=False, segment=None, length=256, steps=3000, batch=64, lr=2e-5, wd=1e-2),    # [ref] VadCLIP AdamW (official ckpt used)
     "tpwng": dict(runner="tpwng", text=True, magnitude=False, segment=32, length=None, steps=3000, batch=16, lr=1e-3, wd=5e-3),    # [est] TPWNG (paper-only)
-    "pel4vad": dict(runner="pel4vad", text=False, magnitude=False, segment=32, length=None, steps=6290, batch=64, lr=5e-4, wd=0.0),  # [ref] PEL4VAD: 50 epochs x (16100 crop-samples / bs 128) = 6290 steps, Adam lr=5e-4 (paper 0.8676 on 1024-d I3D)
+    "pel4vad": dict(runner="pel4vad", text=False, magnitude=False, segment=32, length=None, steps=6290, batch=64, lr=5e-4, wd=0.0, crop_sampling="random"),  # [ref] PEL4VAD: 50 epochs x (16100 crop-samples / bs 128) = 6290 steps, Adam lr=5e-4 (paper 0.8676 on 1024-d I3D)
 }
 
 # paper-faithful official head checkpoints present locally (eval-only).
@@ -88,6 +88,8 @@ def _data_cfg(backbone: str, spec: dict, variant: str = "i3d"):
             "backbone": backbone,
             "dataset_dir": "ucf_crime",
             "feature_variant": variant,  # which I3D extraction (i3d_tushar/i3d_pyvideo/i3d_ours)
+            # heads whose official recipe treats each crop as its own training sample
+            "train_crop_sampling": spec.get("crop_sampling"),
             "ground_truth": None,
             # i3d: lazy zip load (avoids eager-loading 1610 npy ~12.8 GB into the
             # 15 GB WSL RAM, which crashes WSL). clip uses npy dirs (unaffected).
