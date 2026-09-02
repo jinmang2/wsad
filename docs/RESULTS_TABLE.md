@@ -14,3 +14,9 @@ Frame-level ROC-AUC on the 290-video test split. `*` = official checkpoint.
 | clip_tsa | clip | 0.8123 | 0.8758 | -0.0635 | `outputs/matrix_clip_tsa_clip/results.json` |
 | vadclip | clip | 0.8654 | 0.8801 | -0.0147 | `experiments/runs/vadclip_scratch/seed234/result.json` |
 | tpwng | clip | _pending_ | 0.8779 | — | — |
+| pel4vad | i3d_1024_seg200 | _0.8281 (200-step smoke)_ | 0.8676 | — | `outputs/pel4vad_smoke.log` |
+
+`pel4vad` is a **200-step smoke run**, not a reproduction — the official recipe is 5000
+steps. It is listed because the port is wired and learning (loss 1.41 → 0.86, AUC 0.8256 →
+0.8281 across the two evals, still rising), which is what the smoke was for. Replace the
+row with a real number before comparing it to anything.
