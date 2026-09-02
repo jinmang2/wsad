@@ -25,10 +25,25 @@ the card**, alongside the LanguageBind set in `docs/FEATURE_SOURCES.md`. Video S
 different family from both I3D (CNN) and VideoMAE/Cosmos (ViT), so it widens the
 backbone axis rather than duplicating it.
 
-Unknowns to resolve before fetching: exact dimension, crop protocol, snippet stride, and
-the missing license. Hosted on SharePoint, not Hugging Face, so the fetcher's registry
-needs a plain-URL source type — a small extension to
-`scripts/fetch_pretrained_features.py`.
+**License checked 2026-09-03: there is none.** `github.com/erktkdg/MTFL` (11 stars, 81
+files, code for both detection and recognition, last pushed 2026-03) ships **no LICENSE
+file**, and the GitHub API reports `license: null`. Absent an explicit grant that means all
+rights reserved, which matters here because this repo *commits* its ports — a port written
+by reading unlicensed source is a derivative-work risk in a way that reading MIT-licensed
+PEL4VAD was not.
+
+Viable paths, in order of preference:
+1. **Reimplement from the paper only**, without reading their source — exactly how `gs_moe`
+   was built (its module docstring records that the official code was unreleased). This
+   sidesteps the licensing question entirely and is the established pattern here.
+2. **Use only the published VST features** (data derived from UCF-Crime, not code). Lower
+   risk than the source, but still unstated terms, so it needs a caveat wherever a number
+   from them is reported — the same treatment `docs/FEATURE_SOURCES.md` gives LanguageBind.
+3. Ask the authors to add a license. Cheapest if they respond; not something to block on.
+
+Other unknowns before fetching the features: exact dimension, crop protocol and snippet
+stride. They are hosted on SharePoint, not Hugging Face, so
+`scripts/fetch_pretrained_features.py` would need a plain-URL source type.
 
 ## 3. Prior art Spec 2 is actually competing with
 
