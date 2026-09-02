@@ -137,3 +137,32 @@ not practical on this card without a smaller variant or a second GPU.
 The ranking question is now cheap to answer (a 40-video 224p gate is ~30 min) but the
 *commitment* question is expensive. Sequence accordingly: gate at 224p, and only spend the
 448p budget if the 224p features clear i3d and VideoMAE on the screen.
+
+### Cosmos-Embed1 forensic gate — RESULT (2026-09-02): does not beat VideoMAE
+
+Identical 40-video test subset as every row above.
+
+| feature set | MAGNITUDE | CONTENT | PROBE | extraction cost |
+|---|---|---|---|---|
+| `videomae_GATEfix` (ViT-B, 768-d) | 0.5537 | **0.7209** | **0.6767** | ~3 h full set |
+| `cosmos224_GATE` (Cosmos-Embed1-224p, 256-d) | 0.4932 | 0.6620 | 0.6272 | ~6 h full set |
+| `i3d_1024_seg200` | 0.4995 | 0.5993 | 0.5536 | already have |
+| `i3d_mgfn` | 0.4937 | 0.5916 | 0.5392 | already have |
+
+Cosmos-224p clears both I3D variants but **loses to VideoMAE-base on every axis** — content
+-0.059, probe -0.050 — and its magnitude sits at chance (0.4932), so magnitude heads get
+nothing from it. It also costs ~2x the extraction time for that worse screen.
+
+**Verdict: do not spend the extraction budget on Cosmos-224p.** The 448p variant may well
+screen higher (4x the tokens, 768-d instead of 256-d), but at ~24 h for the full set it is
+not affordable on this card, and nothing in the 224p result suggests the gap to VideoMAE is
+small enough to be worth that bet. VideoMAE-base remains the best cost/benefit for Track A.
+
+This does not retire the Cosmos integration: it stays as the only text-aligned video
+backbone besides CLIP, and it is the right thing to revisit if the card changes or if a
+smaller distilled Cosmos variant appears. The screen ranks and does not certify, so the
+conclusion is specifically about *where to spend GPU hours*, not about the model's quality.
+
+**Next in Track A is LanguageBind** (`docs/FEATURE_SOURCES.md`): 768-d, 10-crop,
+magnitude-preserving, text-aligned, full coverage, and **zero GPU hours** — a strictly
+better use of the next screening slot than any extraction.
