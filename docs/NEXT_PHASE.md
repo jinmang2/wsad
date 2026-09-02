@@ -100,3 +100,40 @@ dying partway through the window (the run left no per-video timestamps, so the w
 may cover a long stall rather than 88 slow videos). Either way the extractor itself is
 fine: with the GPU otherwise idle this is a single evening, so
 `scripts/run_phase1_videomae.sh` is worth resuming as-is (it is idempotent/resumable).
+
+## Cosmos-Embed1 — added as a backbone, cost measured (2026-09-02)
+
+`src/features/cosmos.py` registers NVIDIA's Cosmos-Embed1 (`--backbone cosmos`). It is the
+first **text-aligned** video backbone here besides CLIP, so it can feed the VLM heads, and
+its base checkpoints contain no UCF-Crime (Kinetics + robotics + AV only). The
+`-448p-anomaly-detection` variant IS finetuned on Vad-Reasoning (UCF-Crime, XD-Violence,
+ShanghaiTech, UBnormal) and the extractor **refuses to load it** — same leakage trap as
+the OPear VideoMAE variant flagged above.
+
+Two output modes, because the head↔feature mapping actually differs:
+`output="proj"` is the 768-d text-aligned projection, **L2-normalized by the model**
+(measured L2 = 1.0000 ± 0.0003) — the magnitude channel is therefore constant and useless
+to RTFM/MGFN. `output="cls"` is the Q-Former pooled vector before projection (L2 = 11.61 ±
+0.02), magnitude-preserving, for those heads.
+
+### Throughput (RTX 2070 SUPER 8 GB, fp16, measured end-to-end and per stage)
+
+| backbone | snippets/s | notes |
+|---|---|---|
+| VideoMAE-base (ViT-B, 1 forward per 16-frame tubelet) | 38.9 | batch 16, 775 MB |
+| Cosmos-Embed1-224p (ViT-g, 8 frame-forwards per snippet) | 5.6 | batch-independent, 2.6–3.4 GB |
+| Cosmos-Embed1-448p | ~4x slower again (1025 vs 257 tokens) | 5.0 GB at batch 4 |
+
+Stage breakdown at batch 8 (224p): model 1283 ms, processor 92 ms, PIL→numpy 12 ms — it is
+**GPU-compute bound**, so there is no cheap preprocessing win to take. The cost is
+structural: a 1B-param ViT-g run once per *frame* (8 per snippet) against VideoMAE-base's
+86M ViT-B run once per *clip*.
+
+Projected full UCF-Crime extraction: **~6 h at 224p** (train `--sample-to 32` ≈ 2.6 h +
+full-length test ≈ 3.5 h) and **~24 h at 448p**. So 224p is an overnight job and 448p is
+not practical on this card without a smaller variant or a second GPU.
+
+### Where this leaves Track A
+The ranking question is now cheap to answer (a 40-video 224p gate is ~30 min) but the
+*commitment* question is expensive. Sequence accordingly: gate at 224p, and only spend the
+448p budget if the 224p features clear i3d and VideoMAE on the screen.
