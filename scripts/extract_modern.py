@@ -75,13 +75,15 @@ def extract_one(extractor, zip_path: str, member: str, backbone: str) -> np.ndar
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--backbone", required=True, help="videomae | xclip | internvideo | clip")
+    ap.add_argument("--backbone", required=True, help="videomae | xclip | internvideo | clip | cosmos")
     ap.add_argument("--model-name", default=None, help="HF id (e.g. MCG-NJU/videomae-large)")
     ap.add_argument("--split", default="test", choices=["test", "train"])
     ap.add_argument("--limit", type=int, default=None, help="extract only the first N (forensic gate)")
     ap.add_argument("--segment-to", type=int, default=None, help="mean-pool to N segments (train) or keep full (test)")
     ap.add_argument("--sample-to", type=int, default=None, help="FAST: extract only N uniformly-spaced snippets/video (~10x fewer forwards); output is (N, dim)")
     ap.add_argument("--device", default="cuda")
+    ap.add_argument("--output", default=None,
+                    help="cosmos: 'proj' (text-aligned, L2-normalized) or 'cls' (magnitude-preserving)")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
@@ -94,6 +96,8 @@ def main():
         kw["segment_to"] = args.segment_to
     if args.sample_to is not None:
         kw["sample_to"] = args.sample_to
+    if args.output is not None:
+        kw["output"] = args.output
     extractor = build_extractor(args.backbone, **kw)
 
     idx = build_zip_index()

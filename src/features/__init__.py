@@ -9,7 +9,7 @@ imported lazily inside each extractor so this import never fails.
 from src.features.base import FeatureExtractor  # noqa
 from src.registry import FEATURE_EXTRACTORS  # noqa
 
-from . import clip, i3d, videomae, vggish, xclip, internvideo  # noqa  (trigger registration)
+from . import clip, cosmos, i3d, videomae, vggish, xclip, internvideo  # noqa  (trigger registration)
 
 
 def build_extractor(name: str, **kwargs) -> FeatureExtractor:
