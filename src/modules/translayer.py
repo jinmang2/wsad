@@ -31,6 +31,12 @@ from torch import nn
 #           only branch-1 is approximated. Peak memory is linear in T, which is what
 #           lets full-length / streaming sequences run without per-crop splitting.
 #
+#   causal  the same band, past-only (``j <= i``) in both branches. This is the online /
+#           streaming mode: a frame is scored without any lookahead, so peak memory is
+#           O(W) and a live deployment can emit a score the moment a frame arrives. The
+#           AUC delta against `window` is the price of causality specifically, since the
+#           two share the same band width.
+#
 # Leave unset for verification/eval.
 _ATTN_IMPL = os.environ.get("WSAD_ATTN", "eager").lower()
 # Half-width of the band for WSAD_ATTN=window; query i attends to |i-j| <= W.
@@ -113,36 +119,73 @@ def _banded_decay(t: torch.Tensor, window: int) -> torch.Tensor:
 _MASK_CACHE: dict = {}
 
 
-def _band_mask(n_q: int, n_k: int, offset: int, window: int, device) -> torch.Tensor:
-    """``True`` where ``|i - j| <= window`` for a query block starting ``offset`` into
-    its key span."""
-    key = (n_q, n_k, offset, window, str(device))
+def _band_mask(n_q: int, n_k: int, offset: int, window: int, causal: bool, device) -> torch.Tensor:
+    """``True`` where query ``i`` may attend to key ``j``, for a query block starting
+    ``offset`` into its key span: ``|i - j| <= window``, and additionally ``j <= i``
+    when ``causal``."""
+    key = (n_q, n_k, offset, window, causal, str(device))
     mask = _MASK_CACHE.get(key)
     if mask is None:
         qi = torch.arange(n_q, device=device).unsqueeze(1) + offset
         kj = torch.arange(n_k, device=device).unsqueeze(0)
-        mask = (qi - kj).abs() <= window
+        delta = qi - kj
+        mask = (delta.abs() <= window) & (delta >= 0) if causal else (delta.abs() <= window)
         _MASK_CACHE[key] = mask
     return mask
 
 
-def _window_attend(q, k, v, window: int, chunk: int) -> torch.Tensor:
+# The interior limit of the decay normalizer: s[j] -> 1 + 2·Σ_{d>=1} r^d = (1+r)/(1-r).
+# `_decay_column_sums` converges to this exponentially away from the sequence ends.
+_DECAY_SUM_LIMIT = (1.0 + _DECAY_RATIO) / (1.0 - _DECAY_RATIO)
+
+
+def _causal_banded_decay(t: torch.Tensor, window: int) -> torch.Tensor:
+    """Branch-2 with the future dropped: ``out[i] = Σ_{i-W <= j <= i} (r^(i-j)/s) · t[j]``.
+
+    Note the normalizer: the bidirectional path divides by ``attn2.sum(-1)``, which is a
+    **whole-clip** quantity — it depends on the sequence length and on how far ``j`` sits
+    from either end. That makes the official branch-2 unstreamable *in principle*: an
+    online scorer does not know the length of a stream that has not finished, and scoring
+    the same frame inside two differently-sized windows would give two different answers.
+
+    So the causal backend uses the interior limit ``(1+r)/(1-r)`` instead, which the true
+    normalizer approaches exponentially (``r^17 ~ 2e-3``). The consequence is deliberate
+    and worth stating: causal scores are position-independent and therefore *exactly*
+    reproducible chunk-by-chunk, at the cost of a small deviation from the offline model
+    confined to the first and last ~20 snippets of a clip.
+
+    Implemented as a causal 1-D convolution (left padding only), so it stays O(T·W) and,
+    unlike the bidirectional version, never reads a frame that has not happened yet.
+    """
+    b, h, n, d = t.shape
+    w = min(window, n - 1)
+    u = (t / _DECAY_SUM_LIMIT).permute(0, 1, 3, 2).reshape(b * h * d, 1, n)
+
+    lags = torch.arange(w, -1, -1, device=t.device, dtype=torch.float32)  # r^W ... r^0
+    kernel = torch.exp(-lags / math.e).to(t.dtype).view(1, 1, -1)
+
+    out = F.conv1d(F.pad(u, (w, 0)), kernel)[..., :n]
+    return out.reshape(b, h, d, n).permute(0, 1, 3, 2)
+
+
+def _window_attend(q, k, v, window: int, chunk: int, causal: bool = False) -> torch.Tensor:
     """Softmax attention restricted to a band, in query blocks (O(T·(chunk+2W)) memory).
 
     Each query block attends only to the key span it can reach, so neither the scores
-    nor the mask are ever (n, n). Every row keeps at least its own position, so no row
-    is fully masked (no NaNs).
+    nor the mask are ever (n, n). Every row keeps at least its own position (``j == i``
+    survives both the band and the causal constraint), so no row is fully masked.
     """
     n = q.shape[2]
     if window >= n - 1:
-        # the band already covers the sequence — masking would be a no-op
-        return F.scaled_dot_product_attention(q, k, v)
+        # the band already covers the reachable span — only causality still constrains
+        return F.scaled_dot_product_attention(q, k, v, is_causal=causal)
 
     outs = []
     for start in range(0, n, chunk):
         end = min(start + chunk, n)
-        ks, ke = max(0, start - window), min(n, end + window)
-        mask = _band_mask(end - start, ke - ks, start - ks, window, q.device)
+        ks = max(0, start - window)
+        ke = min(n, end if causal else end + window)
+        mask = _band_mask(end - start, ke - ks, start - ks, window, causal, q.device)
         outs.append(
             F.scaled_dot_product_attention(
                 q[:, :, start:end], k[:, :, ks:ke], v[:, :, ks:ke], attn_mask=mask
@@ -173,11 +216,12 @@ class Attention(nn.Module):
         qkvt = self.to_qkv(x).chunk(4, dim=-1)
         q, k, v, t = map(lambda u: rearrange(u, "b n (h d) -> b h n d", h=self.heads), qkvt)
 
-        if _ATTN_IMPL == "window":
+        if _ATTN_IMPL in ("window", "causal"):
             # Neither branch builds an (n, n) tensor: branch-1 is banded softmax over
             # query blocks, branch-2 is the exact banded decay as a convolution.
-            out1 = _window_attend(q, k, v, _ATTN_WINDOW, _ATTN_CHUNK)
-            out2 = _banded_decay(t, _ATTN_WINDOW)
+            causal = _ATTN_IMPL == "causal"
+            out1 = _window_attend(q, k, v, _ATTN_WINDOW, _ATTN_CHUNK, causal=causal)
+            out2 = (_causal_banded_decay if causal else _banded_decay)(t, _ATTN_WINDOW)
             out = torch.cat([out1, out2], dim=-1)
             out = rearrange(out, "b h n d -> b n (h d)")
             return self.to_out(out)

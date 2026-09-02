@@ -126,3 +126,44 @@ scaling is exactly linear (T 16384 → 32768 doubles window's cost 29 → 58 ms 
   deployment wants to sit on it.
 - Next (unchanged order): causal mask + its AUC delta, then `StreamingScorer` — whose
   value is now quantified in advance by the T ≥ 8192 rows.
+
+## Step 3 + 4 — causal attention and `StreamingScorer` (implemented 2026-09-02)
+
+`WSAD_ATTN=causal` (band + past-only, both branches) and `src/streaming.py` are in. The
+AUC deltas still need the GPU and are pending; what is already settled is the *structure*,
+and two things fell out of it that change the Spec 2 story.
+
+### The official branch-2 is not streamable in principle
+The bidirectional decay divides by `attn2.sum(-1)`, and that sum is a **whole-clip**
+quantity: it depends on the sequence length and on how far `j` sits from either end. An
+online scorer cannot compute it — the stream has not finished — and scoring the same frame
+inside two differently-sized windows would give two different answers.
+
+The causal backend therefore normalizes by the **interior limit** `(1+r)/(1-r) ≈ 5.4977`,
+which the true normalizer approaches exponentially (`r^17 ≈ 2e-3`). This buys exact
+position-independence, and its cost is a small deviation from the offline model confined to
+the first and last ~20 snippets of a clip. This substitution is the reason streaming can be
+exact at all, so it is a design decision, not an implementation detail.
+
+### The eval path is exactly streamable, and the latency is one snippet
+Walking UR-DMU's eval forward, every component is either pointwise in time (`Memory_Unit`
+reads a learnable bank, never other frames; `encoder_mu`; `cls_head`) or has a finite
+receptive field (`Temporal` = `Conv1d(k=3, pad=1)`; the translayer stack = `depth · W`).
+So `StreamingScorer` reproduces offline scoring **bit-for-bit** from a bounded window
+rather than approximating it — `receptive_field()` derives that window from the module tree
+so a config change cannot silently make the two diverge.
+
+The honest caveat: causal attention is past-only, but the `Conv1d` keeps `padding=1`, so a
+score still depends on **one** future snippet. Streaming latency is one snippet (16 frames),
+not zero. A truly zero-latency variant needs a causal convolution, which changes what the
+pretrained weights mean — so this is reported rather than hidden.
+
+Tests (`tests/test_translayer_window.py`, `tests/test_streaming.py`, 18 of them) pin: the
+causal decay against a masked dense reference; that changing frame *k* leaves every output
+before *k* bit-identical (with a bidirectional control that must fail that same check);
+full-width causal against a dense causal reference; streaming == offline; chunk-size
+invariance; and that the model never sees more than `left + chunk + right` frames.
+
+### Still to measure (needs the GPU, currently held by the Cosmos gate)
+`causal:W` rows in `bench_efficiency.py` — the AUC price of removing lookahead at matched
+band width, and the streaming FPS / per-chunk latency at T ≥ 8192.
