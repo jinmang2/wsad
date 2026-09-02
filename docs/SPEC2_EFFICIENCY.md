@@ -213,3 +213,40 @@ mainly a flash-kernel problem, so a better attention kernel was never going to f
 **Kept as an opt-in flag, not deleted**, because the isolated result may well hold on a
 card with different kernel selection — but on this hardware the honest answer to "does
 FlexAttention fix the windowed path?" is **no**, and the default stays `sdpa`.
+
+## Step 3 RESULT — what causality actually costs (2026-09-02)
+
+UR-DMU official checkpoint, UCF-Crime test, 290 videos. The rows are chosen to **decompose**
+the loss rather than just report it: each adds exactly one change to the row above.
+
+| attn | AUC | ΔAUC | AP | what the row adds |
+|---|---|---|---|---|
+| `eager` | 0.8697 | — | 0.3562 | reference: bidirectional, whole-clip normalizer |
+| `window:∞` | 0.8697 | ±0.0000 | 0.3562 | the banded implementation, no truncation → **exact** |
+| `causal:∞` | 0.8346 | **-0.0351** | 0.2834 | past-only + the interior-limit normalizer |
+| `causal:256` | 0.8102 | -0.0595 | 0.2589 | + band truncated to 256 |
+| `causal:64` | 0.7696 | -0.1001 | 0.2026 | + band truncated to 64 |
+
+Read together with the bidirectional band rows measured earlier (`window:64` = 0.8476):
+
+- **Removing lookahead costs 3.5 pt** on its own, with unbounded past context. That is the
+  irreducible price of online operation for this checkpoint.
+- **Band truncation is far more expensive once causal.** Going to W=64 costs 2.2 pt
+  bidirectionally but **6.5 pt** on top of causal — which makes sense, since causality has
+  already halved the available context, so each further truncation removes proportionally
+  more of what is left.
+- Consequently a streaming deployment must be **generous with the window** (W ≥ 256 keeps
+  the total under 6 pt) rather than treating W=64 as a reasonable default.
+
+**These are zero-shot causal evaluations of a bidirectionally-trained checkpoint**, which is
+the honest framing and also the obvious next step: the causal-finetune recipe listed in this
+document's plan has not been run, and it is where most of the 10 pt should be recoverable.
+Nothing here says causal WSVAD is expensive in principle — only that *retrofitting causality
+onto a bidirectional checkpoint* is.
+
+⚠️ The FPS and latency columns in this table are **not trustworthy**: `causal:256` reports a
+higher throughput than `eager`, which cannot be right. Run-to-run variance on this card
+(single consumer GPU under WSL) exceeds the differences being measured, as the FlexAttention
+section found the hard way. The AUC column is a full deterministic pass over the test set and
+is reliable; treat the timing columns as indicative only, and measure throughput with the
+warm-up/median protocol from the FlexAttention section when it matters.
