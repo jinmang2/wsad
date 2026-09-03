@@ -233,6 +233,8 @@ class URDMUForVideoAnomalyDetection(URDMUPreTrainedModel):
         # triplet + KL + distance (weights from official ucf_main/config).
         import torch.nn.functional as F
 
+        from src.modules.amp import safe_bce  # autocast-safe BCE (fp16 training)
+
         frame = out["frame"]
         t = frame.size(1)
         k = t // 16 + 1
@@ -240,17 +242,17 @@ class URDMUForVideoAnomalyDetection(URDMUPreTrainedModel):
         half = frame.size(0) // 2
         y = torch.cat([torch.zeros(half, device=device), torch.ones(half, device=device)])
         vid = torch.topk(frame, k, dim=1)[0].mean(1)
-        loss_mil = F.binary_cross_entropy(vid.clamp(1e-6, 1 - 1e-6), y)
+        loss_mil = safe_bce(vid.clamp(1e-6, 1 - 1e-6), y)
 
         a_score = torch.topk(out["A_att"], k, dim=1)[0].mean(1)
         n_score = torch.topk(out["N_att"], k, dim=1)[0].mean(1)
         an_score = torch.topk(out["A_Natt"], k, dim=1)[0].mean(1)
         na_score = torch.topk(out["N_Aatt"], k, dim=1)[0].mean(1)
         loss_mem = (
-            F.binary_cross_entropy(a_score.clamp(1e-6, 1 - 1e-6), torch.ones_like(a_score))
-            + F.binary_cross_entropy(n_score.clamp(1e-6, 1 - 1e-6), torch.ones_like(n_score))
-            + F.binary_cross_entropy(an_score.clamp(1e-6, 1 - 1e-6), torch.zeros_like(an_score))
-            + F.binary_cross_entropy(na_score.clamp(1e-6, 1 - 1e-6), torch.zeros_like(na_score))
+            safe_bce(a_score.clamp(1e-6, 1 - 1e-6), torch.ones_like(a_score))
+            + safe_bce(n_score.clamp(1e-6, 1 - 1e-6), torch.ones_like(n_score))
+            + safe_bce(an_score.clamp(1e-6, 1 - 1e-6), torch.zeros_like(an_score))
+            + safe_bce(na_score.clamp(1e-6, 1 - 1e-6), torch.zeros_like(na_score))
         )
         return (
             loss_mil

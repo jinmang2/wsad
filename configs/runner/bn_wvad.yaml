@@ -21,6 +21,8 @@ model_config:
     attn_impl: eager # "sdpa" for FlashAttention/fused kernels (speed; not bit-exact)
 
 # Paper: Adam, lr 1e-4, weight_decay 5e-5, batch 64 (32+32), num_segments 200.
+# Official train.py:16 applies clip_grad_norm_(net.parameters(), 1.) every step.
 optimizer:
     learning_rate: 1e-4
     weight_decay: 0.00005
+    grad_clip_norm: 1.0

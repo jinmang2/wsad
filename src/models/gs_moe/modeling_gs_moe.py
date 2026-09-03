@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 import torch
+from src.modules.amp import safe_bce
 from torch import nn
 from transformers import PreTrainedModel
 from transformers.utils import ModelOutput
@@ -257,7 +258,7 @@ class GSMoEForVideoAnomalyDetection(GSMoEPreTrainedModel):
             [torch.zeros(half, device=device), torch.ones(half, device=device)]
         )
         vid = self._topk_mil(frame).clamp(1e-6, 1 - 1e-6)
-        loss = self.bce(vid, y)
+        loss = safe_bce(vid, y)
 
         # smoothness + sparsity (on abnormal scores)
         loss = loss + self.smooth(scores) + self.sparse(frame[half:].reshape(-1))
@@ -281,6 +282,6 @@ class GSMoEForVideoAnomalyDetection(GSMoEPreTrainedModel):
             ).clamp(
                 1e-6, 1 - 1e-6
             )  # (half, E)
-            loss = loss + self.bce(expert_vid, tgt)
+            loss = loss + safe_bce(expert_vid, tgt)
 
         return loss

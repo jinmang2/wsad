@@ -9,8 +9,8 @@ cache_dir: null
 root: ${oc.env:WSAD_DATA,"~/data/wsad"}
 source: auto        # local | hub | auto (local if present, else HF)
 backbone: i3d       # i3d | clip
-dataset_dir: ucf_crime  # subdir under root holding {train,test}.zip + ground_truth.json + UCFClipFeatures (zip-direct I3D path)
-ground_truth: null      # explicit frame-level gt json; null -> <root>/<dataset_dir>/ground_truth.json, else HF
+dataset_dir: ucf_crime  # per-dataset subdir: features/{i3d,clip}/, annotations/, manifest.* (see docs/DATA_LOCAL.md)
+ground_truth: null      # explicit gt json; null -> <ds>/annotations/ground_truth.json (legacy <ds>/ground_truth.json), else HF
 clip_length: 256    # CLIP train segment length (vadclip 256)
 segment: null       # null=keep; int=uniform mean-pool to N segments (clip_tsa/tpwng 32)
 single_crop: true   # CLIP: use only crop __0 (official single-crop)

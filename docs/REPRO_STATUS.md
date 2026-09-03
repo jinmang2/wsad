@@ -121,20 +121,41 @@ WebDataset/manifest path is still the scale plan for extraction outputs + AIHub.
 
 ## 3. I3D extraction pipeline
 
-Two distinct I3D lineages — **do not mix their features** (scale differs ~10×):
+Three I3D lineages exist; **do not mix their features** (scale + content differ):
 
-1. **tushar-n** (`src/i3d.py`, `src/features/i3d.py`) — torch-native, HF weights.
-   Already wired into `scripts/extract_features.py`. This is the repo default.
-2. **GowthamGottimukkala / RTFM** (`pretrained/i3d/*.pkl`) — **Caffe2 blobs**
-   (`res_conv1_bn_*`, `nonlocal_conv*`; baseline 430 / nonlocal 540 blobs from
-   facebookresearch/video-nonlocal-net). Needs **Caffe2→PyTorch conversion**
-   before use. This is the lineage RTFM used for `UCF_*_ten_crop_i3d`.
+1. **pytorchvideo `i3d_8x8_r50`** (`src/features/i3d.py` default) — SlowFast-lib
+   I3D, Kinetics 0.45/0.225 norm + torchvision TenCrop. A separate branch (needs
+   the `pytorchvideo` lib, now imported lazily).
+2. **tushar-n baseline** (HF `converted_ref_i3d.pt`) — the baseline Caffe2 weights
+   pre-converted; loadable into `src.i3d.I3Res50`.
+3. **GowthamGottimukkala / RTFM lineage** — facebookresearch/video-nonlocal-net
+   Caffe2 blobs (`pretrained/i3d/i3d_{baseline,nonlocal}_32x2_IN_pretrain_400k.pkl`,
+   430 / 540 blobs). **The faithful extractor for the standard WSVAD I3D features.**
 
-Plan: add a Caffe2→torch converter for the two pkls, build a ResNet-50 I3D
-(+nonlocal) torch module, and reproduce the RTFM extract path; cross-check feature
-stats against `UCF_Train_ten_crop_i3d` to confirm fidelity. Separately, the
-`open_clip` ViT-B/16 extractor (FEATURE_EXTRACTORS.md Step B) reproduces the
-`UCFClipFeatures` CLIP cache.
+**DONE 2026-06-14 — Gowtham-faithful pipeline (bit-exact, verified):**
+- `scripts/convert_i3d_caffe2.py` converts both Caffe2 pkls → `pretrained/i3d/
+  i3d_{baseline,nonlocal}_r50_kinetics.pth` (regex blob-rename ported verbatim from
+  Gowtham `utils/convert_weights.py`; baseline 265/318, nonlocal 325/383 params,
+  fc/num_batches_tracked legitimately skipped).
+- `src/features/i3d_gowtham.py` mirrors Gowtham `extract_features.py` exactly
+  (resize **340×256** LANCZOS, **`(x*2/255)−1`**, exact 10-crop coords, ffmpeg→jpg,
+  snippet 16) → `(T,10,2048)`. `scripts/extract_i3d_gowtham.py` is the batch entry.
+- `scripts/verify_i3d_extract.py`: our extractor == Gowtham's *original* code on the
+  same frames is **BIT-EXACT (max|Δ|=0)**. ~37 s + ffmpeg I/O per video.
+
+**RTFM's released `UCF_*_ten_crop_i3d` are NOT reproducible from this pipeline.**
+Cross-check vs RTFM `_archive/Abuse001` (`scripts/diag_i3d_rtfm.py`,
+`scripts/grid_i3d_rtfm.py`): nonlocal crop-avg cosine **0.74** (baseline 0.51).
+Ruled out: 10-crop order (crop-avg also 0.74), temporal offset (shift 0 optimal,
+flat per-snippet cos — no drift), BGR channel (0.67, worse), and the interpolation
+sweep at the geometry-forced 340×256 (lanczos 0.74 / bicubic 0.75 / bilinear 0.76 —
+resize is NOT a free variable: the 10-crop coords `16:240,58:282,…` require a
+256-tall frame). Everything plateaus at ~0.74–0.76. The flat consistent gap ⇒
+**RTFM used a different / unpublished I3D checkpoint or extractor** (closest to
+nonlocal + bilinear). Since the MGFN `features/i3d/*.zip` (L2~2.5) are
+our canonical set and RTFM's are archived/incompatible, exact RTFM-byte repro is
+moot — the deliverable is the verified Gowtham-faithful extractor (use **nonlocal**
+for new data / AIHub). Separately, `open_clip` ViT-B/16 reproduces the CLIP cache.
 
 ## 4. Dataset strategy (open decision — needs your call)
 

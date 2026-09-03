@@ -30,6 +30,7 @@ from typing import Optional
 
 import torch
 import torch.nn.functional as F
+from src.modules.amp import safe_bce
 from torch import nn
 from transformers import PreTrainedModel
 from transformers.utils import ModelOutput
@@ -129,6 +130,9 @@ class TPWNGPreTrainedModel(PreTrainedModel):
 
 @MODELS.register("tpwng")
 class TPWNGForVideoAnomalyDetection(TPWNGPreTrainedModel):
+    # text-prompt-with-normality-guidance: uses a CLIP text encoder
+    requires_text_aligned = True
+
     def __init__(self, config: TPWNGConfig):
         super().__init__(config)
         d = config.embed_dim
@@ -227,7 +231,7 @@ class TPWNGForVideoAnomalyDetection(TPWNGPreTrainedModel):
         psi = a * s_an + (1 - a) * (1 - s_nn)
         score_g = psi.clamp(0, 1)
         gamma = (psi.detach() > self.config.theta).float()
-        loss_cl = F.binary_cross_entropy(score_g.clamp(1e-6, 1 - 1e-6), gamma)
+        loss_cl = safe_bce(score_g.clamp(1e-6, 1 - 1e-6), gamma)
 
         # ranking: anomaly-sim higher in abnormal than normal; normal-sim high on normal
         an_max = s_an.max(dim=1).values  # (B,)

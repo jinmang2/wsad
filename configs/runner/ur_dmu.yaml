@@ -12,7 +12,9 @@ model_config:
     mem_size: 60
     topk_ratio: 16
     dropout_rate: 0.5
-    attn_impl: eager # "sdpa" for FlashAttention/fused kernels (speed; not bit-exact)
+    attn_impl: eager # exact default. NB: SDPA alone doesn't fit 8GB full-length test —
+    # the distance-decay branch materializes a T×T adjacency regardless (O(T²) is structural).
+    # -> efficient temporal modeling (sliding-window / bounded distance) is a Spec2 task.
     margin: 1.0
     w_mem: 1.0
     w_triplet: 0.1
@@ -20,4 +22,4 @@ model_config:
 
 optimizer:
     learning_rate: 1e-4
-    weight_decay: 0.0005
+    weight_decay: 0.00005

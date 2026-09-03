@@ -62,17 +62,31 @@ def score_feature(
     feature: np.ndarray,
     frames_per_clip: int = 16,
     device: str = "cpu",
+    backbone: str = "i3d",
 ) -> np.ndarray:
     """Per-frame anomaly scores for a single video's cached feature.
 
+    The two cached layouts differ and cannot be told apart from the shape alone: the I3D
+    test cache is ``(T, ncrops, D)`` while the CLIP cache is ``(ncrops, T, D)``. This used
+    to assume the I3D one unconditionally, which silently transposed CLIP features — a
+    20-snippet CLIP video came back with 16 frame scores instead of 320. Hence the explicit
+    ``backbone``, shared with :func:`src.eval_matrix.score_video` through the same layout
+    helper so the two cannot disagree.
+
+    Note this scores all crops in **one** forward. For UR-DMU / BN-WVAD that is numerically
+    identical to the per-crop loop in ``eval_matrix`` (verified: max|Δ| = 6e-8, since those
+    models only combine crops in a final mean) but needs ~10x the peak memory, which is why
+    the reported-eval path splits. Prefer ``eval_matrix.evaluate`` for anything reported.
+
     Args:
-        feature: ``(T, ncrops, D)`` array (test-hub layout, magnitude appended).
+        feature: cached feature for one video, in ``backbone``'s layout.
+        backbone: which cache layout ``feature`` is in (``"i3d"`` or ``"clip"``).
     Returns:
         1-D array of length ``T * frames_per_clip`` with scores in [0, 1].
     """
-    x = torch.as_tensor(feature, dtype=torch.float32, device=device)
-    # (T, ncrops, D) -> (1, ncrops, T, D)
-    x = x.permute(1, 0, 2).unsqueeze(0)
+    from src.eval_matrix import _to_crops_layout
+
+    x = torch.as_tensor(_to_crops_layout(feature, backbone), device=device)
     out = model(video=x)
     clip_scores = out.scores.squeeze(0).squeeze(-1).cpu().numpy()  # (T,)
     return np.repeat(clip_scores, frames_per_clip)

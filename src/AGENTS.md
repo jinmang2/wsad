@@ -43,7 +43,7 @@ model packages. Everything the framework touches lives here.
 ### Testing
 - Offline contract tests in `tests/` (synthetic, no downloads): `test_models.py`
   (forward/backward for all models), `test_trainer.py` (full train+eval loop),
-  `test_attention.py`, `test_data.py`. Run with the `balaenoptera` conda python.
+  `test_attention.py`, `test_data.py`. Run with `uv run pytest`.
 - New model: copy an existing package (`configuration_*.py`, `modeling_*.py`,
   `__init__.py`), register with `@MODELS.register("name")`, import it in
   `models/__init__.py`, add `configs/runner/<name>.yaml`, add to `MODEL_NAMES`.

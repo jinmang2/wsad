@@ -63,6 +63,9 @@ class MGFNFeatureAmplifier(nn.Module):
         super().__init__()
         init_dim = config.dims[0]
         self.mag_ratio = config.mag_ratio
+        # split point between feature channels and the appended magnitude channel;
+        # config-driven so non-I3D backbones (CLIP 512, VideoMAE 768) work too.
+        self.channels = config.channels
         self.to_tokens = nn.Conv1d(
             config.channels,
             init_dim,
@@ -80,7 +83,7 @@ class MGFNFeatureAmplifier(nn.Module):
         # c: feature dimension, `C` in paper.
         bs, ncrops, t, c = x.size()
         x = x.view(bs * ncrops, t, c).permute(0, 2, 1)
-        x_f, x_m = x[:, :2048, :], x[:, 2048:, :]
+        x_f, x_m = x[:, : self.channels, :], x[:, self.channels :, :]
         x_f = self.to_tokens(x_f)
         x_m = self.to_mag(x_m)  # eq (1)
         x_f = x_f + self.mag_ratio * x_m  # eq (2)

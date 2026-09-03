@@ -1,0 +1,23 @@
+defaults: [default]
+
+model_class: src.models.pel4vad.modeling_pel4vad.PEL4VADForVideoAnomalyDetection
+
+model_config:
+    _target_: src.models.pel4vad.configuration_pel4vad.PEL4VADConfig
+    feature_size: 1024
+    hidden_size: 128
+    out_dim: 300
+    num_heads: 1
+    win_size: 9
+    gamma: 0.6
+    bias: 0.2
+    norm: true
+    t_step: 9
+    dropout_rate: 0.1
+    temp: 0.09
+    lamda: 1.0
+
+# PEL4VAD official UCF setup (main.py: Adam lr 5e-4, CosineAnnealingLR, no weight decay).
+optimizer:
+    learning_rate: 5e-4
+    weight_decay: 0.0

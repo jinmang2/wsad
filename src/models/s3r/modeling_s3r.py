@@ -32,6 +32,7 @@ from typing import Optional
 
 import torch
 import torch.nn.functional as F
+from src.modules.amp import safe_bce
 from einops import rearrange
 from torch import nn
 from transformers import PreTrainedModel
@@ -302,7 +303,7 @@ class S3RForVideoAnomalyDetection(S3RPreTrainedModel):
                 nor_feamagnitude=n_sel, abn_feamagnitude=a_sel,
             )
             labels = torch.cat([normal_labels, abnormal_labels], dim=0)
-            loss_macro = F.binary_cross_entropy(
+            loss_macro = safe_bce(
                 macro_scores.squeeze(-1).clamp(1e-6, 1 - 1e-6), labels
             )
             loss_smooth = TemporalSmoothnessLoss(self.config.lambda_smooth)(scores)

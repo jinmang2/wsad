@@ -43,7 +43,7 @@ class I3DFeatureExtractor(FeatureExtractor):
     def extract(self, video: Union[str, List[Image.Image]]) -> np.ndarray:
         from src.data import TenCropVideoFrameDataset
 
-        clips = TenCropVideoFrameDataset(video, frames_per_clip=self.snippet_len)
+        clips = TenCropVideoFrameDataset(video, clip_length=self.snippet_len)
         loader = DataLoader(clips, batch_size=self.batch_size, shuffle=False)
 
         outputs = []

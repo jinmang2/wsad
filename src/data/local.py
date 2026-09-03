@@ -72,10 +72,51 @@ def _list_npy(d: str) -> List[str]:
     return sorted(f for f in os.listdir(d) if f.endswith(".npy")) if os.path.isdir(d) else []
 
 
+# ---- layout resolvers: dataset-keyed `features/{i3d,clip}` + `annotations/`,
+# with legacy fallback (top-level `clip/`, dataset-root `*.zip`/`ground_truth.json`).
+def _features_root(root: str, data_cfg) -> str:
+    return os.path.join(_dataset_root(root, data_cfg), "features")
+
+
+def _clip_dir(root: str, data_cfg, mode: str) -> str:
+    new = os.path.join(_features_root(root, data_cfg), "clip", mode)
+    if os.path.isdir(new):
+        return new
+    return os.path.join(os.path.expanduser(root), "clip", mode)  # legacy top-level
+
+
+def _i3d_variant(data_cfg) -> str:
+    """Feature-extraction variant subdir under ``features/`` (default ``i3d``).
+
+    Lets the comparison matrix select a specific I3D extraction —
+    ``i3d_tushar`` (HF tushar-n), ``i3d_pyvideo`` (HF main/pytorchvideo),
+    ``i3d_ours`` (our Gowtham re-extract) — each a self-consistent train+test set.
+
+    ``i3d_mgfn`` = MGFN authors' 10-crop I3D (HKU OneDrive), full-length
+    ``(T, 10, 2048)``, RTFM-family scale L2~22 — COMPLETE 1610/290 but raw
+    pre-seg32 (needs T->32 to feed seg32 models). Do NOT mix with ``i3d``
+    (DeepMIL scale ~2.5). See features/i3d_mgfn/PROVENANCE.md.
+    """
+    return getattr(data_cfg, "feature_variant", None) or "i3d"
+
+
+def _i3d_npy_dir(root: str, data_cfg, mode: str) -> str:
+    v = _i3d_variant(data_cfg)
+    new = os.path.join(_features_root(root, data_cfg), v, mode)
+    if os.path.isdir(new):
+        return new
+    return os.path.join(os.path.expanduser(root), v, mode)  # legacy top-level
+
+
 def _load_clip(
-    root: str, mode: str, length: Optional[int], n_seg: Optional[int], single_crop: bool
+    root: str,
+    mode: str,
+    length: Optional[int],
+    n_seg: Optional[int],
+    single_crop: bool,
+    data_cfg=None,
 ) -> Dict[str, np.ndarray]:
-    d = os.path.join(root, "clip", mode)
+    d = _clip_dir(root, data_cfg, mode)
     out = {}
     for f in _list_npy(d):
         if single_crop and not _crop0(f):
@@ -87,9 +128,24 @@ def _load_clip(
     return out
 
 
-def _load_i3d(root: str, mode: str) -> Dict[str, np.ndarray]:
-    d = os.path.join(root, "i3d", mode)
-    out = {f: np.load(os.path.join(d, f)) for f in _list_npy(d)}
+# Variants whose **test** cache is stored crops-first, ``(ncrops, T, D)``, unlike the I3D
+# test cache which is ``(T, ncrops, D)``. Everything downstream assumes the I3D convention
+# for i3d-backbone variants, so these are transposed at load. Confirmed by inspecting the
+# arrays, not assumed: i3d_1024_seg200 test is (88, 10, 1024) while languagebind_10crop
+# test is (10, 88, 768) — the same video, opposite axis order.
+_CROPS_FIRST_TEST_VARIANTS = {"languagebind_10crop"}
+
+
+def _identity(x):  # open_func for lazy npy-dir loading (FeatureDataset does np.load)
+    return x
+
+
+def _load_i3d(root: str, mode: str, data_cfg=None) -> Dict[str, str]:
+    """Return ``{name: path}`` (LAZY). Eager-loading all npy into RAM OOM-kills WSL
+    for big variants (i3d_mgfn_seg200 train = 25 GB > 15 GB RAM -> session crash).
+    FeatureDataset(open_func=_identity) does ``np.load(path)`` per __getitem__."""
+    d = _i3d_npy_dir(root, data_cfg, mode)
+    out = {f: os.path.join(d, f) for f in _list_npy(d)}
     if not out:
         raise FileNotFoundError(f"no I3D .npy under {d} (see docs/DATA_LOCAL.md)")
     return out
@@ -104,8 +160,12 @@ def _dataset_root(root: str, data_cfg) -> str:
 
 
 def _i3d_zip_path(root: str, data_cfg, mode: str) -> Optional[str]:
-    p = os.path.join(_dataset_root(root, data_cfg), f"{mode}.zip")
-    return p if os.path.exists(p) else None
+    # new: <dataset>/features/<variant>/<mode>.zip ; legacy: <dataset>/<mode>.zip
+    new = os.path.join(_features_root(root, data_cfg), _i3d_variant(data_cfg), f"{mode}.zip")
+    if os.path.exists(new):
+        return new
+    legacy = os.path.join(_dataset_root(root, data_cfg), f"{mode}.zip")
+    return legacy if os.path.exists(legacy) else None
 
 
 def _zip_feature_values(
@@ -124,8 +184,14 @@ def _zip_feature_values(
     return names, {n: np.load(z.open(i)) for n, i in zip(names, infos)}, None
 
 
-def has_local(root: str, backbone: str, mode: str) -> bool:
-    return bool(_list_npy(os.path.join(os.path.expanduser(root), backbone, mode)))
+def has_local(root: str, backbone: str, mode: str, data_cfg=None) -> bool:
+    if backbone == "clip":
+        d = _clip_dir(root, data_cfg, mode)
+    elif backbone == "i3d":
+        d = _i3d_npy_dir(root, data_cfg, mode)
+    else:
+        d = os.path.join(os.path.expanduser(root), backbone, mode)
+    return bool(_list_npy(d))
 
 
 def has_local_i3d_zip(root: str, data_cfg, mode: str = "train") -> bool:
@@ -167,50 +233,77 @@ def build_datasets_local(data_cfg):
     """Build ``({normal, abnormal}, test)`` from ``~/data/wsad`` (local backbone)."""
     root = os.path.expanduser(getattr(data_cfg, "root", "~/data/wsad"))
     backbone = getattr(data_cfg, "backbone", "i3d")
-    with_mag = backbone == "i3d"
+    # magnitude defaults to the I3D convention; the comparison matrix overrides it
+    # so visual-magnitude heads (RTFM/MGFN/...) get a magnitude channel on CLIP too.
+    with_mag = bool(getattr(data_cfg, "with_magnitude", backbone == "i3d"))
 
     # I3D: prefer per-video npy dirs (i3d/{train,test}); else read the local
     # MGFN {train,test}.zip in place ("B": zip-direct, no extraction/duplication).
-    if backbone == "i3d" and not _list_npy(os.path.join(root, "i3d", "train")):
+    if backbone == "i3d" and not _list_npy(_i3d_npy_dir(root, data_cfg, "train")):
         if has_local_i3d_zip(root, data_cfg, "train"):
             return _build_i3d_from_zip(root, data_cfg)
     length = getattr(data_cfg, "clip_length", 256)
     n_seg = getattr(data_cfg, "segment", None)
     single_crop = getattr(data_cfg, "single_crop", True)
+    # VadCLIP trains on ALL 10 crops as separate samples (official ucf_CLIP_rgb.csv =
+    # 1610 vids x 10 crops = 16100 rows); test stays single-crop. 10x crop augmentation.
+    train_all_crops = bool(getattr(data_cfg, "train_all_crops", False))
 
     def load(mode):
         if backbone == "clip":
-            return _load_clip(root, mode, length, n_seg, single_crop)
-        return _load_i3d(root, mode)
+            sc = single_crop and not (train_all_crops and mode == "train")
+            return _load_clip(root, mode, length, n_seg, sc, data_cfg)
+        return _load_i3d(root, mode, data_cfg)
 
+    # i3d npy dirs are loaded LAZILY (values = paths, np.load per __getitem__) to avoid
+    # OOM-killing WSL on big variants (seg200 = 25 GB); clip values are eager arrays.
+    i3d_open = _identity if backbone == "i3d" else None
     train_vals = load("train")
     names = list(train_vals)
     normal = [n for n in names if "Normal" in n]
     abnormal = [n for n in names if "Normal" not in n]
+    # Optional per-head crop sampling for TRAINING only (test always averages all crops,
+    # which is the protocol every reported number was produced with). See FeatureDataset.
+    crop_sampling = getattr(data_cfg, "train_crop_sampling", None)
     train = {
         "normal": FeatureDataset(
-            normal, {f: train_vals[f] for f in normal}, with_magnitude=with_mag
+            normal, {f: train_vals[f] for f in normal}, open_func=i3d_open,
+            with_magnitude=with_mag, crop_sampling=crop_sampling,
         ),
         "abnormal": FeatureDataset(
-            abnormal, {f: train_vals[f] for f in abnormal}, with_magnitude=with_mag
+            abnormal, {f: train_vals[f] for f in abnormal}, open_func=i3d_open,
+            with_magnitude=with_mag, crop_sampling=crop_sampling,
         ),
     }
 
     test_vals = load("test")
     gt = _align_gt(list(test_vals), _load_ground_truth(data_cfg))
     test = FeatureDataset(
-        list(test_vals), test_vals, labels=gt, with_magnitude=with_mag
+        list(test_vals), test_vals, labels=gt, open_func=i3d_open, with_magnitude=with_mag,
+        time_major=_i3d_variant(data_cfg) in _CROPS_FIRST_TEST_VARIANTS,
     )
     return train, test
 
 
-def _bare_vid(fname: str) -> str:
-    """Backbone-agnostic video id: drop ext, an ``_i3d`` tag, and a ``__<crop>``.
+_UCF_ID_ANCHOR = "_x264"
 
-    ``Abuse028_x264_i3d.npy`` and ``Abuse028_x264__0.npy`` -> ``Abuse028_x264``.
+
+def _bare_vid(fname: str) -> str:
+    """Backbone-agnostic video id: drop the extension, any backbone tag, and a ``__<crop>``.
+
+    Every UCF-Crime id ends at ``_x264``, so anchoring there is robust to whatever suffix a
+    new backbone appends — the previous version stripped only a literal ``_i3d``, which
+    meant a newly added feature set (``Abuse028_x264_languagebind.npy``) failed to match its
+    ground truth and every test video was silently dropped.
+
+    ``Abuse028_x264_i3d.npy``, ``Abuse028_x264__0.npy`` and
+    ``Abuse028_x264_languagebind.npy`` all -> ``Abuse028_x264``.
     """
     b = fname[:-4] if fname.endswith(".npy") else fname
-    if b.endswith("_i3d"):
+    at = b.find(_UCF_ID_ANCHOR)
+    if at != -1:
+        return b[: at + len(_UCF_ID_ANCHOR)]
+    if b.endswith("_i3d"):  # datasets without the _x264 anchor keep the old behaviour
         b = b[: -len("_i3d")]
     return b.split("__")[0]
 
@@ -233,8 +326,14 @@ def _local_ground_truth_path(data_cfg) -> Optional[str]:
         if os.path.exists(gt):
             return gt
     root = getattr(data_cfg, "root", "~/data/wsad")
-    cand = os.path.join(_dataset_root(root, data_cfg), "ground_truth.json")
-    return cand if os.path.exists(cand) else None
+    ds = _dataset_root(root, data_cfg)
+    for cand in (
+        os.path.join(ds, "annotations", "ground_truth.json"),  # new layout
+        os.path.join(ds, "ground_truth.json"),  # legacy dataset-root
+    ):
+        if os.path.exists(cand):
+            return cand
+    return None
 
 
 def _load_ground_truth(data_cfg):
