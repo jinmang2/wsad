@@ -57,3 +57,45 @@ head train both behave.
    then a short `sultani` + `ur_dmu` train at `--feature-dim 768`.
 3. Only if it fails the screen does the Cosmos/VideoMAE extraction budget become the best
    use of the card again.
+
+## Screen result (2026-09-03): the best linear probe of any candidate, for zero GPU hours
+
+Downloaded (33 min, 26.4 GB) and screened on the **same 40 videos** as every earlier gate.
+
+| feature set | MAGNITUDE | CONTENT | PROBE | extraction cost |
+|---|---|---|---|---|
+| **`languagebind_10crop`** | 0.4972 | 0.6587 | **0.7144** | **zero GPU** |
+| `videomae_GATEfix` | 0.5537 | **0.7209** | 0.6767 | ~3 h |
+| `cosmos224_GATE` | 0.4932 | 0.6620 | 0.6272 | ~6 h |
+| `i3d_1024_seg200` | 0.4995 | 0.5993 | 0.5536 | already have |
+| `i3d_mgfn` | 0.4937 | 0.5916 | 0.5392 | already have |
+
+LanguageBind takes the **linear probe** — the strongest of the three atemporal proxies — by
++0.038 over VideoMAE and +0.16 over the I3D features every reported number currently rests
+on, while VideoMAE keeps the content-distance measure. Since the probe is the proxy that
+best tracked downstream behaviour before, this is the most promising feature set the project
+has seen, and it arrived without touching the GPU.
+
+**Correction to the survey above.** These features are not L2-normalized (per-vector L2 ≈
+12.6), and that was read as "magnitude-preserving, so RTFM/MGFN can use it". The screen says
+otherwise: **magnitude AUC is 0.4972, i.e. chance.** Unnormalized is not the same as
+informative. Magnitude-based heads should not be expected to gain anything here; the value
+is in the content/probe axes, which is where the VLM and attention heads live.
+
+Still only a *ranking*. The real gate is a short head train (`run_matrix.py --variant
+languagebind_10crop --feature-dim 768`), which needs the GPU and has not been run.
+
+### Integration fixes this required (all of them silent failures)
+
+- **Test-cache layout.** `languagebind_10crop` stores `(ncrops, T, D)` in *both* splits,
+  whereas the I3D test cache is `(T, ncrops, D)` — the same video is `(10, 88, 768)` here and
+  `(88, 10, 1024)` there. Everything downstream assumes the I3D convention for i3d-backbone
+  variants, so the features are transposed at load (`_CROPS_FIRST_TEST_VARIANTS`). Without
+  it, 88 snippets are read as 10 crops and the ground truth silently misaligns.
+- **Video-id anchoring.** `_bare_vid` stripped a literal `_i3d` suffix, so
+  `Abuse028_x264_languagebind.npy` matched no ground-truth key and *every* test video was
+  dropped. Now anchored on `_x264`, which every UCF-Crime id ends with, so any future
+  backbone tag works without an edit.
+- **Diagnostic layout.** `feature_forensics.py` assumed `(T, ncrops, D)` too; `--crops-first`
+  transposes. Without it the crop mean is taken over time and the numbers are meaningless
+  rather than absent.

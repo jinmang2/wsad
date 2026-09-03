@@ -78,6 +78,7 @@ class FeatureDataset(Dataset):
         open_func: Optional[Callable] = None,
         with_magnitude: bool = True,
         crop_sampling: Optional[str] = None,
+        time_major: bool = False,
     ):
         if crop_sampling not in (None, "random"):
             raise ValueError(f"crop_sampling must be None or 'random', got {crop_sampling!r}")
@@ -87,6 +88,12 @@ class FeatureDataset(Dataset):
         self.open_func = open_func
         self.with_magnitude = with_magnitude
         self.crop_sampling = crop_sampling
+        # Cached test features are not stored consistently: the I3D test cache is
+        # (T, ncrops, D) while some variants — LanguageBind, for one — keep (ncrops, T, D)
+        # in both splits. Downstream code (`eval_matrix._to_crops_layout`) assumes the I3D
+        # convention for anything loaded as an i3d variant, so a crops-first cache has to be
+        # transposed on the way in or it silently reads T snippets as crops.
+        self.time_major = time_major
 
     def __len__(self) -> int:
         return len(self.values)
@@ -137,6 +144,8 @@ class FeatureDataset(Dataset):
     def __getitem__(self, idx: int) -> Dict[str, np.ndarray]:
         fname = self.get_filename(idx)
         feature = self.open(self.values[fname])
+        if self.time_major and feature.ndim == 3:
+            feature = np.ascontiguousarray(feature.transpose(1, 0, 2))  # (crops,T,D)->(T,crops,D)
         out = _sample_outputs(feature, fname, self.with_magnitude)
         if self.labels is not None:
             out["label"] = np.array(self.labels[fname], dtype=np.float32)

@@ -90,9 +90,18 @@ def _iter_zip(path) -> Iterator[Tuple[str, np.ndarray]]:
             yield i.filename.split("/")[-1], np.load(io.BytesIO(z.read(i)))
 
 
-def _iter_dir(d) -> Iterator[Tuple[str, np.ndarray]]:
+def _iter_dir(d, crops_first: bool = False) -> Iterator[Tuple[str, np.ndarray]]:
+    """Yield ``(filename, (T, ncrops, D))``.
+
+    ``crops_first`` transposes a ``(ncrops, T, D)`` cache into the I3D convention this
+    module assumes. Getting it wrong is silent, not loud: the crop mean would be taken over
+    the time axis and every score would be meaningless rather than an error.
+    """
     for f in sorted(glob.glob(os.path.join(d, "**", "*.npy"), recursive=True)):
-        yield os.path.basename(f), np.load(f)
+        feat = np.load(f)
+        if crops_first and feat.ndim == 3:
+            feat = feat.transpose(1, 0, 2)
+        yield os.path.basename(f), feat
 
 
 def _fmt(auc: float) -> str:
@@ -159,13 +168,17 @@ def main():
     ap.add_argument("--dir", default=None, help="screen an arbitrary feature dir (gate use)")
     ap.add_argument("--name", default=None, help="label for --dir")
     ap.add_argument("--no-probe", action="store_true", help="skip the (slower) linear probe")
+    ap.add_argument("--crops-first", action="store_true",
+                    help="the cache is (ncrops, T, D) rather than the I3D (T, ncrops, D) "
+                         "— e.g. languagebind_10crop; without this the crop mean is taken "
+                         "over the time axis and the scores are meaningless")
     args = ap.parse_args()
     print(f"GT: {len(GT)} videos")
     print("RELATIVE atemporal screen (higher = more linearly-accessible signal). "
           "These do NOT predict temporal-head AUC — gate with a short head train.\n")
     if args.dir:
         screen(args.name or os.path.basename(args.dir.rstrip('/')),
-               _iter_dir(args.dir), run_probe=not args.no_probe)
+               _iter_dir(args.dir, args.crops_first), run_probe=not args.no_probe)
         return
     F = os.path.join(ROOT, "features")
     tz = os.path.join(F, "i3d", "test.zip")

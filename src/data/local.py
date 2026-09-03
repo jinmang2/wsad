@@ -128,6 +128,14 @@ def _load_clip(
     return out
 
 
+# Variants whose **test** cache is stored crops-first, ``(ncrops, T, D)``, unlike the I3D
+# test cache which is ``(T, ncrops, D)``. Everything downstream assumes the I3D convention
+# for i3d-backbone variants, so these are transposed at load. Confirmed by inspecting the
+# arrays, not assumed: i3d_1024_seg200 test is (88, 10, 1024) while languagebind_10crop
+# test is (10, 88, 768) — the same video, opposite axis order.
+_CROPS_FIRST_TEST_VARIANTS = {"languagebind_10crop"}
+
+
 def _identity(x):  # open_func for lazy npy-dir loading (FeatureDataset does np.load)
     return x
 
@@ -271,18 +279,31 @@ def build_datasets_local(data_cfg):
     test_vals = load("test")
     gt = _align_gt(list(test_vals), _load_ground_truth(data_cfg))
     test = FeatureDataset(
-        list(test_vals), test_vals, labels=gt, open_func=i3d_open, with_magnitude=with_mag
+        list(test_vals), test_vals, labels=gt, open_func=i3d_open, with_magnitude=with_mag,
+        time_major=_i3d_variant(data_cfg) in _CROPS_FIRST_TEST_VARIANTS,
     )
     return train, test
 
 
-def _bare_vid(fname: str) -> str:
-    """Backbone-agnostic video id: drop ext, an ``_i3d`` tag, and a ``__<crop>``.
+_UCF_ID_ANCHOR = "_x264"
 
-    ``Abuse028_x264_i3d.npy`` and ``Abuse028_x264__0.npy`` -> ``Abuse028_x264``.
+
+def _bare_vid(fname: str) -> str:
+    """Backbone-agnostic video id: drop the extension, any backbone tag, and a ``__<crop>``.
+
+    Every UCF-Crime id ends at ``_x264``, so anchoring there is robust to whatever suffix a
+    new backbone appends — the previous version stripped only a literal ``_i3d``, which
+    meant a newly added feature set (``Abuse028_x264_languagebind.npy``) failed to match its
+    ground truth and every test video was silently dropped.
+
+    ``Abuse028_x264_i3d.npy``, ``Abuse028_x264__0.npy`` and
+    ``Abuse028_x264_languagebind.npy`` all -> ``Abuse028_x264``.
     """
     b = fname[:-4] if fname.endswith(".npy") else fname
-    if b.endswith("_i3d"):
+    at = b.find(_UCF_ID_ANCHOR)
+    if at != -1:
+        return b[: at + len(_UCF_ID_ANCHOR)]
+    if b.endswith("_i3d"):  # datasets without the _x264 anchor keep the old behaviour
         b = b[: -len("_i3d")]
     return b.split("__")[0]
 
